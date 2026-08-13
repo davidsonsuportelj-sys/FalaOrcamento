@@ -135,9 +135,15 @@ function smartParse(text){
  return {client,items,notes:notes.join(". ")};
 }
 
-function processSpeech(text){
+async function processSpeech(text){
   try{
-    const p=smartParse(text);
+    let p=null;
+    try{
+      const r=await fetch("/api/interpret",{method:"POST",credentials:"same-origin",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});
+      if(r.ok) p=await r.json();
+    }catch(e){console.warn("IA indisponível; usando interpretador local.",e)}
+    if(!p) p=smartParse(text);
     data.client=p.client;
     data.items=p.items;
     data.transcript=text;
@@ -146,7 +152,7 @@ function processSpeech(text){
     const box=$("#transcriptBox");
     if(box){
       box.style.display="block";
-      box.innerHTML="<b>Você disse:</b><br>"+escapeHtml(text)+"<br><small>Interpretador v0.6.3 · "+p.items.length+" item(ns) · Cliente: "+escapeHtml(p.client)+"</small>";
+      box.innerHTML="<b>Você disse:</b><br>"+escapeHtml(text)+"<br><small>Interpretador "+(p.source==="ai"?"IA":"local")+" · "+p.items.length+" item(ns) · Cliente: "+escapeHtml(p.client)+"</small>";
     }
     renderItems();
     status.textContent="Pronto! Confira o orçamento.";

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float, DateTime, select, insert, update
 )
 from sqlalchemy.exc import SQLAlchemyError
+from openai import OpenAI
 
 ROOT = Path(__file__).resolve().parent
 
@@ -27,6 +28,8 @@ def normalize_db_url(url: str) -> str:
 DATABASE_URL = normalize_db_url(os.environ.get("DATABASE_URL", ""))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5-mini")
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite:"):
@@ -117,6 +120,62 @@ def security_headers(resp):
     resp.headers["Referrer-Policy"] = "same-origin"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
     return resp
+
+
+@app.post("/api/interpret")
+def interpret_budget():
+    denied = require_admin()
+    if denied:
+        return denied
+    if not OPENAI_API_KEY:
+        return jsonify({"error":"IA não configurada","fallback":True}), 503
+
+    body=request.get_json(silent=True) or {}
+    text=str(body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error":"Texto vazio"}),400
+
+    schema={
+      "type":"object",
+      "properties":{
+        "client":{"type":"string"},
+        "items":{"type":"array","items":{"type":"object","properties":{
+          "name":{"type":"string"},"qty":{"type":"number"},"unit":{"type":"number"}
+        },"required":["name","qty","unit"],"additionalProperties":False}},
+        "notes":{"type":"string"}
+      },
+      "required":["client","items","notes"],
+      "additionalProperties":False
+    }
+    instructions="""Você interpreta falas informais brasileiras de profissionais criando orçamentos.
+Extraia somente informações realmente ditas. Não invente preços, quantidades ou nomes.
+Identifique o cliente mesmo em construções como 'fui na casa de João', 'fiz para Maria', 'cliente Gabriel'.
+Transforme ações em descrições curtas profissionais: 'troquei a porta dele' -> 'Troca de porta'.
+Quando houver '2 telhas 10 reais cada', qty=2 e unit=10.
+Quando só houver um preço para um serviço, qty=1.
+Não inclua contexto irrelevante na descrição. Notes deve conter apenas condições/observações úteis explicitamente ditas.
+Se o cliente não puder ser inferido com segurança, use 'Cliente'."""
+    try:
+        client=OpenAI(api_key=OPENAI_API_KEY)
+        response=client.responses.create(
+            model=OPENAI_MODEL,
+            instructions=instructions,
+            input=text,
+            text={"format":{"type":"json_schema","name":"budget","strict":True,"schema":schema}}
+        )
+        parsed=json.loads(response.output_text)
+        clean=[]
+        for it in parsed.get("items",[])[:100]:
+            q=float(it.get("qty") or 1)
+            u=float(it.get("unit") or 0)
+            clean.append({"name":str(it.get("name") or "Serviço")[:250],
+                          "qty":q,"unit":u,"value":round(q*u,2)})
+        parsed["items"]=clean
+        parsed["source"]="ai"
+        return jsonify(parsed)
+    except Exception as e:
+        print("Erro IA:",repr(e))
+        return jsonify({"error":"Não foi possível interpretar com IA","fallback":True}),502
 
 @app.get("/api/health")
 def health():
