@@ -26,6 +26,7 @@ def normalize_db_url(url: str) -> str:
     return url
 
 DATABASE_URL = normalize_db_url(os.environ.get("DATABASE_URL", ""))
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "empresario@falaorcamento.com")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
@@ -193,11 +194,18 @@ def api_session():
 @app.post("/api/login")
 def login():
     body = request.get_json(silent=True) or {}
+    email = str(body.get("email", "")).strip().lower()
     password = str(body.get("password", ""))
-    if hmac.compare_digest(password, ADMIN_PASSWORD):
+
+    email_ok = hmac.compare_digest(email, ADMIN_EMAIL.strip().lower())
+    password_ok = hmac.compare_digest(password, ADMIN_PASSWORD)
+
+    if email_ok and password_ok:
         session["admin"] = True
-        return jsonify({"ok": True})
-    return jsonify({"error": "Senha incorreta"}), 401
+        session["admin_email"] = email
+        return jsonify({"ok": True, "email": email})
+
+    return jsonify({"error": "E-mail ou senha incorretos"}), 401
 
 @app.post("/api/logout")
 def logout():

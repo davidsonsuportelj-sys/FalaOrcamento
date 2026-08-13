@@ -11,19 +11,36 @@
 
 <div id="loginGate" class="login-gate" style="display:none">
   <div class="login-card">
-    <div class="login-brand">🎙️ <b>Fala<span>Orçamento</span></b></div>
-    <h2>Acessar meus orçamentos</h2>
-    <p>Digite a senha administrativa definida na publicação.</p>
-    <input id="adminPassword" type="password" placeholder="Senha" autocomplete="current-password">
+    <div class="login-logo">🎙️</div>
+    <div class="login-brand"><b>Fala<span>Orçamento</span></b></div>
+    <div class="login-tag">Área do empresário</div>
+    <h2>Acesse sua conta</h2>
+    <p>Entre para criar, acompanhar e gerenciar seus orçamentos.</p>
+
+    <label for="businessEmail">E-mail</label>
+    <input id="businessEmail" type="email" placeholder="seuemail@empresa.com" autocomplete="username">
+
+    <label for="adminPassword">Senha</label>
+    <div class="password-wrap">
+      <input id="adminPassword" type="password" placeholder="Sua senha" autocomplete="current-password">
+      <button id="togglePassword" type="button" class="toggle-pass" aria-label="Mostrar senha">👁</button>
+    </div>
+
     <button id="loginBtn" class="primary">ENTRAR</button>
+    <button id="forgotBtn" class="login-link" type="button">Esqueci minha senha</button>
     <div id="loginError" class="login-error"></div>
+
+    <div class="login-foot">
+      <span>FalaOrçamento</span>
+      <small>Simples para quem faz.</small>
+    </div>
   </div>
 </div>
 
 <div class="app">
   <header class="topbar">
     <div class="brand"><div class="logo">🎙</div><span>Fala<span>Orçamento</span></span></div>
-    <div class="server-state"><span class="dot"></span><span class="state-text">v0.8 · IA</span></div>
+    <div class="server-state"><span class="dot"></span><span class="state-text">v0.9 · Login</span></div>
   </header>
 
   <main>

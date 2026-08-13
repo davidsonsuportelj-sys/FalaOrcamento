@@ -409,10 +409,11 @@ function hideLogin(){
 }
 
 async function loginAdmin(){
+  const email=$("#businessEmail").value.trim();
   const password=$("#adminPassword").value;
   $("#loginError").textContent="";
   try{
-    await api("/login",{method:"POST",body:JSON.stringify({password})});
+    await api("/login",{method:"POST",body:JSON.stringify({email,password})});
     adminAuthenticated=true;
     hideLogin();
     await loadProviderServer();
@@ -636,3 +637,13 @@ async function bootPublicQuoteServer(){
 }
 
 checkBackend();
+
+if($("#togglePassword")) $("#togglePassword").onclick=()=>{
+  const input=$("#adminPassword");
+  input.type=input.type==="password"?"text":"password";
+  $("#togglePassword").textContent=input.type==="password"?"👁":"🙈";
+};
+
+if($("#forgotBtn")) $("#forgotBtn").onclick=()=>{
+  alert("Recuperação de senha ainda não está ativa nesta versão. O empresário deve solicitar a redefinição ao administrador do sistema.");
+};

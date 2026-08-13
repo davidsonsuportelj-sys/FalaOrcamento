@@ -13,6 +13,8 @@ services:
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: OPENAI_API_KEY
