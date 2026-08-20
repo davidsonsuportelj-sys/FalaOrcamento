@@ -5,3 +5,4 @@ psycopg[binary]>=3.2,<4
 reportlab>=4.2,<5
 
 google-auth>=2.35,<3
+google-auth-oauthlib>=1.2,<2
