@@ -854,7 +854,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.17"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.18"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -866,7 +866,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.17"
+        "version": "1.6.18"
     })
 
 
@@ -1157,7 +1157,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.17"
+        "version": "1.6.18"
     })
 
 
@@ -1213,7 +1213,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.17"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.18"})
 
 
 
@@ -1233,7 +1233,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.17"
+        "version":"1.6.18"
     })
 
 
@@ -1294,7 +1294,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.17"
+        "version": "1.6.18"
     })
 
 
@@ -1800,5 +1800,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.17 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.18 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)

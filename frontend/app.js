@@ -984,7 +984,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.16 ----------
+// ---------- Conta e empresa v1.6.18 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{
@@ -1018,4 +1018,65 @@ $("#saveAccountProfile")?.addEventListener("click",async()=>{
   }catch(e){
     alert(e?.message||"Não foi possível atualizar a conta.");
   }
+});
+
+
+// ---------- Sessão / logout v1.6.18 ----------
+async function loadActiveAccountSummary(){
+  const box=document.querySelector("#activeAccountSummary");
+  if(!box) return;
+  try{
+    const p=await api("/account/profile");
+    const un=document.querySelector("#activeUserName");
+    const bn=document.querySelector("#activeBusinessName");
+    const em=document.querySelector("#activeUserEmail");
+    if(un) un.textContent=p.user?.name||"—";
+    if(bn) bn.textContent=p.account?.name||"—";
+    if(em) em.textContent=p.user?.email||"—";
+  }catch(e){
+    const un=document.querySelector("#activeUserName");
+    const bn=document.querySelector("#activeBusinessName");
+    const em=document.querySelector("#activeUserEmail");
+    if(un) un.textContent="Sessão indisponível";
+    if(bn) bn.textContent="—";
+    if(em) em.textContent="—";
+  }
+}
+
+async function performAccountLogout(){
+  const btn=document.querySelector("#logoutAccountBtn");
+  if(btn){
+    btn.disabled=true;
+    btn.textContent="Saindo…";
+  }
+  try{
+    await api("/logout",{method:"POST"});
+  }catch(e){
+    // Mesmo se a resposta falhar, recarregar força nova checagem de sessão no backend.
+  }finally{
+    try{
+      sessionStorage.clear();
+      // Não apagamos preferências PWA/instalação do localStorage.
+      localStorage.removeItem("fala_auth_user");
+      localStorage.removeItem("fala_authenticated");
+    }catch(e){}
+    location.href="/";
+  }
+}
+
+document.querySelector("#logoutAccountBtn")?.addEventListener("click",async()=>{
+  const ok=confirm("Deseja sair desta conta?");
+  if(!ok) return;
+  await performAccountLogout();
+});
+
+// Compatibilidade com botão antigo de logout, se existir.
+document.querySelector("#logoutBtn")?.addEventListener("click",async(event)=>{
+  event.preventDefault();
+  await performAccountLogout();
+});
+
+// Carrega resumo quando a área de conta estiver disponível.
+window.addEventListener("load",()=>{
+  setTimeout(()=>loadActiveAccountSummary(),400);
 });
