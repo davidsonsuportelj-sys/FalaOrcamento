@@ -71,6 +71,9 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 APP_ENV = os.environ.get("APP_ENV", "development").lower()
 PUBLIC_APP_URL = os.environ.get("PUBLIC_APP_URL", "https://falaorcamento.davidson-suportelj.workers.dev").rstrip("/")
 SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
@@ -630,33 +633,57 @@ Fala: "fui na casa de Gabriel troquei a porta troquei a janela e o fogão de lug
 Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" qty 1 unit 100; "Reposicionamento de fogão" qty 1 unit 100.
 """
 
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": text}
-        ],
-        "format": schema,
-        "stream": False,
-        "options": {
-            "temperature": 0,
-            "num_ctx": 2048
-        },
-        "keep_alive": "10m"
-    }
-
     try:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            OLLAMA_BASE_URL + "/api/chat",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        if GROQ_API_KEY:
+            import requests
+            groq_response = requests.post(
+                GROQ_BASE_URL + "/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + GROQ_API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt + "\nResponda somente JSON válido."},
+                        {"role": "user", "content": text}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 1200,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=20
+            )
+            groq_response.raise_for_status()
+            content = groq_response.json()["choices"][0]["message"]["content"]
+            active_source = "groq"
+            active_model = GROQ_MODEL
+        else:
+            payload = {
+                "model": OLLAMA_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text}
+                ],
+                "format": schema,
+                "stream": False,
+                "options": {"temperature": 0, "num_ctx": 2048},
+                "keep_alive": "10m"
+            }
+            data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            req = urllib.request.Request(
+                OLLAMA_BASE_URL + "/api/chat",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            content = result.get("message", {}).get("content", "")
+            active_source = "ollama"
+            active_model = OLLAMA_MODEL
 
-        content = result.get("message", {}).get("content", "")
+
         parsed = json.loads(content)
         parsed = _semantic_guardrails(text, parsed)
 
@@ -687,8 +714,8 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
             "client": str(parsed.get("client") or "Cliente").strip()[:180],
             "items": clean_items,
             "notes": str(parsed.get("notes") or "").strip()[:4000],
-            "source": "ollama",
-            "model": OLLAMA_MODEL
+            "source": active_source,
+            "model": active_model
         }
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         try:
@@ -697,8 +724,8 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
                     account_id=current_account_id(),
                     original_text=text,
                     result_json=json.dumps(response_data, ensure_ascii=False),
-                    source="ollama",
-                    model=OLLAMA_MODEL,
+                    source=active_source,
+                    model=active_model,
                     elapsed_ms=elapsed_ms,
                     corrected_json="",
                     created_at=utcnow()
@@ -728,7 +755,7 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
     except Exception as e:
         print("Erro na IA local:", repr(e))
         return jsonify({
-            "error": "Não foi possível interpretar com a IA local",
+            "error": "Não foi possível interpretar com a IA",
             "fallback": True
         }), 502
 
@@ -854,9 +881,21 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.19"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.20"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
+
+@app.get("/api/ai/status")
+def ai_status():
+    if not current_user_id():
+        return jsonify({"error":"Não autenticado"}), 401
+    return jsonify({
+        "configured": bool(GROQ_API_KEY),
+        "provider": "groq" if GROQ_API_KEY else "ollama",
+        "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
+        "version": "1.6.20"
+    })
+
 
 @app.get("/api/auth/config")
 def auth_config():
@@ -866,7 +905,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.19"
+        "version": "1.6.20"
     })
 
 
@@ -1157,7 +1196,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.19"
+        "version": "1.6.20"
     })
 
 
@@ -1213,7 +1252,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.19"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.20"})
 
 
 
@@ -1233,7 +1272,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.19"
+        "version":"1.6.20"
     })
 
 
@@ -1294,7 +1333,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.19"
+        "version": "1.6.20"
     })
 
 
@@ -1800,5 +1839,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.19 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.20 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)

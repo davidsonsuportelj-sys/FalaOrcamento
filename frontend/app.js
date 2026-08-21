@@ -984,7 +984,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.19 ----------
+// ---------- Conta e empresa v1.6.20 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{

@@ -1,15 +1,8 @@
-# FalaOrçamento v1.6.19 — Git/Render
+# FalaOrçamento v1.6.20 — Groq AI
 
-Correção de acabamento da área **Negócio / Conta**.
+Integração Groq no interpretador já existente. Com `GROQ_API_KEY` configurada, `/api/interpret` usa Groq; sem ela, preserva Ollama como fallback. A chave permanece somente no Render.
 
-## Ajustes
-- removido o bloco duplicado `Sessão atual`;
-- removido o botão duplicado `Sair da conta`;
-- mantido o botão original `SAIR DA CONTA`;
-- dados de responsável, empresa, e-mail e tipo de acesso permanecem na área `Conta e empresa`;
-- Google Login, PostgreSQL, SMTP/Brevo, PWA e links públicos preservados.
+Modelo padrão: `openai/gpt-oss-20b`.
+Mantidos: PostgreSQL, Google Login, SMTP/Brevo, logout, PDF, PWA e links públicos.
 
-## Render
-Start command:
-
-`gunicorn backend.app:app`
+Start: `gunicorn backend.app:app`
