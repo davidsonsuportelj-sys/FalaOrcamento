@@ -523,6 +523,183 @@ def _recover_specific_item_names(original_text, items):
     return items
 
 
+
+def _spoken_number_to_int(token):
+    values={
+        "um":1,"uma":1,"dois":2,"duas":2,"três":3,"tres":3,"quatro":4,"cinco":5,
+        "seis":6,"sete":7,"oito":8,"nove":9,"dez":10,"onze":11,"doze":12
+    }
+    t=str(token or "").strip().lower()
+    if re.fullmatch(r"\d+", t):
+        return int(t)
+    return values.get(t)
+
+
+def _money_from_segment(segment):
+    """Extrai o último preço explícito do trecho, incluindo '85 reais e 50 centavos'."""
+    seg=str(segment or "")
+    # valor com reais + centavos por extenso numérico
+    matches=list(re.finditer(r"(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)\s*reais?(?:\s+e\s+(\d{1,2})\s+centavos?)?", seg, flags=re.I))
+    if matches:
+        m=matches[-1]
+        whole=float(m.group(1).replace(',', '.'))
+        if m.group(2):
+            whole += int(m.group(2))/100.0
+        return round(whole,2)
+    # fala informal: "por 180", "a 25 cada", "fica em 600"
+    matches=list(re.finditer(r"(?:\bpor\b|\ba\b|\bem\b|\bde\b)\s+(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)(?=\s*(?:$|cada\b|cada um\b|cada uma\b|o metro\b|por metro\b|e\b|,))", seg, flags=re.I))
+    if matches:
+        return round(float(matches[-1].group(1).replace(',', '.')),2)
+    return None
+
+
+def _canonical_service_name(segment):
+    """Converte um trecho de fala em descrição curta sem carregar preço/quantidade."""
+    c=" ".join(str(segment or "").strip().split())
+    c=re.sub(r"^(?:também\s+|tambem\s+|e\s+|mais\s+)", "", c, flags=re.I)
+    c=re.sub(r"^fazer\s+o\s+reboco\b", "reboco", c, flags=re.I)
+    c=re.sub(r"^(?:vou\s+|preciso\s+|irei\s+|fazer\s+)", "", c, flags=re.I)
+
+    # Remove tudo a partir da expressão de preço global/unitário.
+    price_cut=re.search(r"\s+(?:o\s+serviço\s+todo\s+fica\s+em|o\s+servico\s+todo\s+fica\s+em|fica\s+em|cobrando|por|a)\s+(?:r\$\s*)?\d", c, flags=re.I)
+    if price_cut:
+        c=c[:price_cut.start()].strip()
+    c=re.sub(r"\s+\d+(?:[.,]\d+)?\s*reais?.*$", "", c, flags=re.I).strip()
+
+    qty=r"(?:\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)"
+    patterns=[
+        (rf"^(?:troca\s+de|trocar)\s+{qty}?\s*(.+)$", "Troca de {}"),
+        (rf"^(?:instalação\s+de|instalacao\s+de|instalar)\s+{qty}?\s*(.+)$", "Instalação de {}"),
+        (rf"^limpeza\s+de\s+{qty}?\s*(.+)$", "Limpeza de {}"),
+        (rf"^carga\s+de\s+(.+)$", "Carga de {}"),
+        (rf"^ajuste\s+de\s+{qty}?\s*(.+)$", "Ajuste de {}"),
+        (rf"^montagem\s+de\s+{qty}?\s*(.+)$", "Montagem de {}"),
+        (rf"^(?:assentamento\s+de|assentar)\s+{qty}?\s*(?:metros?\s+de\s+)?(.+)$", "Assentamento de {}"),
+        (rf"^(?:reboco|fazer\s+o\s+reboco)\s+(?:de\s+)?{qty}?\s*(.+)$", "Reboco de {}"),
+        (rf"^rejunte(?:\s+de)?\s*(.*)$", "Rejunte{}"),
+        (rf"^(?:pintura\s+de|pintar)\s+{qty}?\s*(.+)$", "Pintura de {}"),
+        (rf"^(?:aplicação\s+de|aplicacao\s+de|aplicar)\s+{qty}?\s*(.+)$", "Aplicação de {}"),
+        (rf"^(?:revisão\s+de|revisao\s+de|revisar)\s+{qty}?\s*(.+)$", "Revisão de {}"),
+        (rf"^(?:reparo\s+de|conserto\s+de|consertar|reparar)\s+{qty}?\s*(.+)$", "Reparo de {}"),
+        (rf"^(?:alinhamento\s+de|alinhar)\s+{qty}?\s*(.+)$", "Alinhamento de {}"),
+    ]
+    for pat,fmt in patterns:
+        m=re.match(pat,c,flags=re.I)
+        if not m:
+            continue
+        obj=(m.group(1) if m.lastindex else "").strip(" ,.-")
+        obj=re.sub(r"^(?:a|o|as|os|um|uma)\s+", "", obj, flags=re.I)
+        obj=re.sub(r"\s+(?:novo|nova|novos|novas)$", "", obj, flags=re.I)
+        # Complementos que descrevem cobrança e não o objeto.
+        obj=re.sub(r"\s+(?:em\s+\d+\s+aparelhos?|no\s+carro)$", "", obj, flags=re.I)
+        if fmt == "Rejunte{}":
+            return "Rejunte" if not obj else "Rejunte de "+obj
+        if obj:
+            return fmt.format(obj)[:250]
+
+    low=c.lower()
+    if re.fullmatch(r"material", low):
+        return "Material"
+    if low.startswith("alinhar"):
+        return "Alinhamento"
+    return None
+
+
+def _extract_strong_text_items(original_text):
+    """Extrai itens quando a própria fala fornece ação e preço de forma inequívoca."""
+    text=" ".join(str(original_text or "").strip().split())
+    if not text:
+        return []
+    # Autocorreção é melhor deixada para a IA; evita materializar a versão cancelada.
+    if re.search(r"\b(?:não,?\s*corrigindo|nao,?\s*corrigindo|corrigindo)\b", text, flags=re.I):
+        return []
+
+    # Material pode aparecer depois do valor: "mais 900 reais de material".
+    material=[]
+    for m in re.finditer(r"(?:mais\s+)?(?:r\$\s*)?(\d+(?:[.,]\d{1,2})?)\s*reais?\s+de\s+material\b", text, flags=re.I):
+        material.append((m.start(), {"name":"Material","qty":1.0,"unit":float(m.group(1).replace(',','.'))}))
+
+    action_re=re.compile(
+        r"\b(?:troca\s+de|trocar|instalação\s+de|instalacao\s+de|instalar|limpeza\s+de|carga\s+de|"
+        r"ajuste\s+de|montagem\s+de|assentamento\s+de|assentar|reboco|fazer\s+o\s+reboco|rejunte|"
+        r"pintura\s+de|pintar|aplicação\s+de|aplicacao\s+de|aplicar|revisão\s+de|revisao\s+de|revisar|"
+        r"reparo\s+de|conserto\s+de|consertar|reparar|alinhamento\s+de|alinhar)\b", re.I)
+    starts=list(action_re.finditer(text))
+    found=[]
+    for i,m in enumerate(starts):
+        end=starts[i+1].start() if i+1 < len(starts) else len(text)
+        seg=text[m.start():end].strip(" ,;.")
+        # evita absorver o material que possui preço próprio dentro do serviço anterior
+        mat_inside=re.search(r"(?:,|\be\b)\s*(?:mais\s+)?(?:r\$\s*)?\d+(?:[.,]\d{1,2})?\s*reais?\s+de\s+material\b", seg, flags=re.I)
+        if mat_inside:
+            seg=seg[:mat_inside.start()].strip(" ,;.")
+        unit=_money_from_segment(seg)
+        name=_canonical_service_name(seg)
+        if unit is None or not name:
+            continue
+
+        global_price=bool(re.search(r"\bo\s+servi[cç]o\s+todo\s+fica\s+em\b|\bvalor\s+total\b|\bservi[cç]o\s+todo\b", seg, flags=re.I))
+        qty=1.0
+        if not global_price:
+            # Quantidade só pode vir antes da expressão de preço; assim 320 reais não vira qty=320.
+            qprefix=re.split(r"\s+(?:cobrando|por|a|fica\s+em)\s+(?=(?:r\$\s*)?\d)", seg, maxsplit=1, flags=re.I)[0]
+            qmatch=re.search(r"\b(\d+|um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez)\b", qprefix, flags=re.I)
+            if qmatch:
+                q=_spoken_number_to_int(qmatch.group(1))
+                if q:
+                    qty=float(q)
+        found.append((m.start(), {"name":name,"qty":qty,"unit":unit}))
+
+    # Remove ações cujo trecho é, na prática, parte de outra ação (ex.: "fazer a troca" gera apenas troca).
+    all_items=found+material
+    all_items.sort(key=lambda x:x[0])
+    dedup=[]
+    for pos,item in all_items:
+        if dedup and abs(pos-dedup[-1][0]) < 8 and item[1]["unit"] == dedup[-1][1]["unit"]:
+            continue
+        dedup.append((pos,item))
+    return [x[1] for x in dedup]
+
+
+def _repair_items_from_text(original_text, items):
+    """v1.6.25: corrige associação descrição/valor somente com evidência textual forte."""
+    candidates=_extract_strong_text_items(original_text)
+    if not candidates:
+        return items
+
+    def sig(seq):
+        return [(round(float(x.get("qty",1) or 1),2), round(float(x.get("unit",0) or 0),2)) for x in seq]
+    parsed_sig=sig(items)
+    cand_sig=sig(candidates)
+
+    # Caso normal: mesma sequência numérica. Substituímos só as descrições, preservando números da IA.
+    if len(candidates)==len(items) and cand_sig==parsed_sig:
+        for idx,item in enumerate(items):
+            item["name"]=candidates[idx]["name"]
+        return items
+
+    # Se quantidades divergem apenas porque a fala informou preço global, o valor total ainda ancora o item.
+    if len(candidates)==len(items) and [u for _,u in cand_sig]==[u for _,u in parsed_sig]:
+        for idx,item in enumerate(items):
+            item["name"]=candidates[idx]["name"]
+            if re.search(r"\bo\s+servi[cç]o\s+todo\s+fica\s+em\b", str(original_text), flags=re.I) and cand_sig[idx][0]==1.0:
+                item["qty"]=1.0
+        return items
+
+    # Item perdido pela IA: só reconstruímos quando os valores retornados aparecem, na mesma ordem,
+    # como subsequência dos preços explicitamente extraídos da fala.
+    parsed_units=[u for _,u in parsed_sig]
+    cand_units=[u for _,u in cand_sig]
+    j=0
+    for u in cand_units:
+        if j < len(parsed_units) and abs(u-parsed_units[j]) < 0.001:
+            j+=1
+    if len(candidates)>len(items) and j==len(parsed_units):
+        return [dict(x) for x in candidates]
+
+    return items
+
+
 def _recover_client_name(original_text, parsed_client):
     """Corrige apenas cliente ausente/genérico usando formas naturais explícitas da fala."""
     current=str(parsed_client or "").strip()
@@ -804,6 +981,7 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
         parsed = json.loads(content)
         parsed = _semantic_guardrails(text, parsed)
         parsed["items"] = _recover_specific_item_names(text, parsed.get("items") or [])
+        parsed["items"] = _repair_items_from_text(text, parsed.get("items") or [])
 
         clean_items = []
         for item in parsed.get("items", [])[:100]:
@@ -999,7 +1177,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.24"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.25"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1011,7 +1189,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.24"
+        "version": "1.6.25"
     })
 
 
@@ -1023,7 +1201,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.24"
+        "version": "1.6.25"
     })
 
 
@@ -1314,7 +1492,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.24"
+        "version": "1.6.25"
     })
 
 
@@ -1370,7 +1548,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.24"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.25"})
 
 
 
@@ -1390,7 +1568,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.24"
+        "version":"1.6.25"
     })
 
 
@@ -1451,7 +1629,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.24"
+        "version": "1.6.25"
     })
 
 
@@ -1957,5 +2135,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.24 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.25 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)

@@ -1,4 +1,4 @@
-const CACHE="falaorcamento-static-v1623";
+const CACHE="falaorcamento-static-v1625";
 const STATIC=["/","/index.html","/style.css?v=1623","/app.js?v=1623","/manifest.webmanifest","/icons/icon-192.png","/icons/icon-512.png"];
 
 self.addEventListener("install",event=>{

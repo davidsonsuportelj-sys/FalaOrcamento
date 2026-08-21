@@ -1,18 +1,22 @@
-# FalaOrçamento v1.6.24 — correção determinística das descrições
+# FalaOrçamento v1.6.25 — associação robusta de itens
 
-A v1.6.22 não reconhecia construções nominais como:
-- `instalação de 3 tomadas a 80 reais cada`
-- `troca de disjuntor por 150 reais`
+Baseada na v1.6.24 validada no Render. Esta versão preserva autenticação, PostgreSQL, multiempresa, Google OAuth, Brevo, PDF, WhatsApp e PWA.
 
-A v1.6.24 corrige isso no backend, depois da resposta da IA:
-- preserva quantidade e valor;
-- substitui somente descrições genéricas;
-- reconhece `instalação de`, `troca de`, `limpeza de`, `pintura de`, `reparo de`,
-  reposicionamento e formas verbais equivalentes;
-- não depende de a Groq obedecer ao prompt.
+## Correção principal
 
-Teste automatizado incluído confirmou:
-`Cliente João, instalação de 3 tomadas a 80 reais cada e troca de disjuntor por 150 reais`
-=> `Instalação de tomadas` + `Troca de disjuntor`.
+O pós-processamento agora usa âncoras fortes da própria fala para associar descrição, quantidade e preço. Ele corrige descrições trocadas ou genéricas quando a sequência numérica confirma o alinhamento e consegue reconstruir item perdido somente quando os preços retornados pela IA formam uma subsequência inequívoca dos preços explicitamente falados.
 
-O status técnico foi retirado do cabeçalho comercial.
+Também foram adicionados tratamentos para:
+- valores com centavos (ex.: 85 reais e 50 centavos);
+- preço global de um conjunto (ex.: 5 luminárias, serviço todo por R$ 600 => 1 item de R$ 600);
+- material com preço próprio;
+- ações como carga de gás, ajuste, montagem, alinhamento e rejunte;
+- preservação de autocorreções faladas (ex.: “não, corrigindo…”).
+
+## Regressão
+
+`python tests/test_interpret_regression.py` valida 11 cenários reais: João, Marcos, Roberto, Carlos, Ana, Renato, Fernanda, Gustavo, Patrícia, Lucas e Juliana.
+
+## Deploy
+
+Pacote mínimo para Git/Render. Variáveis de ambiente continuam externas ao ZIP.
