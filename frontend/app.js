@@ -240,7 +240,7 @@ async function processSpeech(text){
       if(r.ok) p=await r.json();
     }catch(e){console.warn("IA indisponível; usando interpretador local.",e)}
     if(!p) p=smartParse(text);
-    if(p.source==="ollama") document.body.dataset.ai="online";
+    if(p.source==="ollama" || p.source==="groq") document.body.dataset.ai="online";
     window.lastInterpretation={
       id:p.interpretation_id||null,
       originalText:text,
@@ -256,7 +256,7 @@ async function processSpeech(text){
     const box=$("#transcriptBox");
     if(box){
       box.style.display="block";
-      box.innerHTML="<b>Você disse:</b><br>"+escapeHtml(text)+"<br><small>Interpretador "+(p.source==="ollama"?"IA local":"local")+" · "+p.items.length+" item(ns) · Cliente: "+escapeHtml(p.client)+"</small>";
+      box.innerHTML="<b>Você disse:</b><br>"+escapeHtml(text)+"<br><small>Interpretador "+(p.source==="groq"?"IA online":(p.source==="ollama"?"IA local":"interpretador local"))+" · "+p.items.length+" item(ns) · Cliente: "+escapeHtml(p.client)+"</small>";
     }
     renderItems();
     status.textContent="Pronto! Confira o orçamento.";
@@ -984,7 +984,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.21 ----------
+// ---------- Conta e empresa v1.6.22 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{

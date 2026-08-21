@@ -89,16 +89,7 @@ body.public-mode main{padding-bottom:20px}
 }
 .login-foot span{font-size:11px;font-weight:800}.login-foot small{font-size:10px}
 
-body[data-ai="online"] .server-state:after{
-  content:" · IA ✓";
-  color:#2a9b59;
-  font-weight:800
-}
-body[data-ai="offline"] .server-state:after{
-  content:" · IA local indisponível";
-  color:#b27a18;
-  font-weight:700
-}
+
 
 .settings-divider{height:1px;background:#eceef4;margin:22px 0}
 .settings-subsection h3{margin:0 0 6px}

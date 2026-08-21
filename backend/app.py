@@ -434,6 +434,67 @@ def security_headers(resp):
 
 
 
+def _recover_specific_item_names(original_text, items):
+    """Recover service descriptions from speech when an LLM returns generic labels."""
+    raw=" ".join(str(original_text or "").strip().split())
+    if not raw or not items:
+        return items
+
+    generic={"serviço","servico","item","produto","trabalho","serviço informado"}
+    candidates=[]
+
+    # Split on punctuation and common connectors, preserving useful service clauses.
+    chunks=re.split(r"[,;.]|\s+\be\b\s+(?=(?:troquei|trocar|instalei|instalar|coloquei|colocar|pintei|pintar|limpei|limpar|consertei|consertar|reparei|reparar|mudei|mover|reposicionei|reposicionar)\b)", raw, flags=re.I)
+    for chunk in chunks:
+        c=chunk.strip()
+        if not c:
+            continue
+        # Remove client/context prefixes.
+        c=re.sub(r"^(?:fui\s+(?:na|à)\s+casa\s+de\s+\S+(?:\s+\S+){0,2}\s+|cliente\s+\S+(?:\s+\S+){0,2}\s*)","",c,flags=re.I)
+        # Remove trailing price expressions.
+        c=re.sub(r"\s+(?:por\s+)?(?:r\$\s*)?\d+(?:[.,]\d{1,2})?\s*(?:reais?)?(?:\s+(?:cada|de cada|cada um))?\s*$","",c,flags=re.I).strip()
+        c=re.sub(r"\s+cobrei\s+.*$","",c,flags=re.I).strip()
+        if not c:
+            continue
+
+        transforms=[
+            (r"^troquei\s+(?:a|o|as|os)?\s*(.+)$","Troca de {}"),
+            (r"^trocar\s+(?:a|o|as|os)?\s*(.+)$","Troca de {}"),
+            (r"^instalei\s+(?:a|o|as|os)?\s*(.+)$","Instalação de {}"),
+            (r"^instalar\s+(?:a|o|as|os)?\s*(.+)$","Instalação de {}"),
+            (r"^coloquei\s+(?:a|o|as|os)?\s*(.+)$","Colocação de {}"),
+            (r"^pintei\s+(?:a|o|as|os)?\s*(.+)$","Pintura de {}"),
+            (r"^limpei\s+(?:a|o|as|os)?\s*(.+)$","Limpeza de {}"),
+            (r"^(?:consertei|reparei)\s+(?:a|o|as|os)?\s*(.+)$","Reparo de {}"),
+            (r"^(?:mudei|reposicionei)\s+(?:a|o|as|os)?\s*(.+?)(?:\s+de\s+lugar)?$","Reposicionamento de {}"),
+        ]
+        found=None
+        for pat,fmt in transforms:
+            mm=re.match(pat,c,flags=re.I)
+            if mm:
+                obj=mm.group(1).strip(" -")
+                if obj:
+                    found=fmt.format(obj)
+                break
+        if found:
+            found=found[:1].upper()+found[1:]
+            candidates.append(found)
+
+    # Only replace generic labels, in order. Never overwrite a specific AI description.
+    ci=0
+    for item in items:
+        name=str(item.get("name") or "").strip()
+        normalized=re.sub(r"\s+"," ",name.lower())
+        if normalized in generic or not normalized:
+            if ci < len(candidates):
+                item["name"]=candidates[ci][:250]
+                ci+=1
+        elif ci < len(candidates):
+            # Consume matching candidate position so later generic items stay aligned.
+            ci+=1
+    return items
+
+
 def _semantic_guardrails(original_text, parsed):
     """Correções conservadoras para erros recorrentes do modelo pequeno local."""
     text=" ".join(str(original_text or "").lower().split())
@@ -686,6 +747,7 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
 
         parsed = json.loads(content)
         parsed = _semantic_guardrails(text, parsed)
+        parsed["items"] = _recover_specific_item_names(text, parsed.get("items") or [])
 
         clean_items = []
         for item in parsed.get("items", [])[:100]:
@@ -881,7 +943,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.21"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.22"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -893,7 +955,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.21"
+        "version": "1.6.22"
     })
 
 
@@ -905,7 +967,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.21"
+        "version": "1.6.22"
     })
 
 
@@ -1196,7 +1258,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.21"
+        "version": "1.6.22"
     })
 
 
@@ -1252,7 +1314,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.21"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.22"})
 
 
 
@@ -1272,7 +1334,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.21"
+        "version":"1.6.22"
     })
 
 
@@ -1333,7 +1395,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.21"
+        "version": "1.6.22"
     })
 
 
@@ -1839,5 +1901,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.21 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.22 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
