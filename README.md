@@ -1,8 +1,11 @@
-# FalaOrçamento v1.6.20 — Groq AI
+# FalaOrçamento v1.6.21 — Groq corrigida
 
-Integração Groq no interpretador já existente. Com `GROQ_API_KEY` configurada, `/api/interpret` usa Groq; sem ela, preserva Ollama como fallback. A chave permanece somente no Render.
+Correções:
+- IA deve preservar o nome específico dos serviços/produtos na descrição dos itens;
+- instrução explícita para não retornar descrições genéricas como “Serviço” quando houver descrição no texto;
+- status técnico “IA local indisponível” removido da experiência principal;
+- diagnóstico da IA permanece disponível pelo backend `/api/ai/status`;
+- PostgreSQL, Google Login, Brevo/SMTP, PDF, PWA e logout preservados.
 
-Modelo padrão: `openai/gpt-oss-20b`.
-Mantidos: PostgreSQL, Google Login, SMTP/Brevo, logout, PDF, PWA e links públicos.
-
-Start: `gunicorn backend.app:app`
+Render Start Command:
+`gunicorn backend.app:app`

@@ -984,7 +984,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.20 ----------
+// ---------- Conta e empresa v1.6.21 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{
@@ -1019,3 +1019,19 @@ $("#saveAccountProfile")?.addEventListener("click",async()=>{
     alert(e?.message||"Não foi possível atualizar a conta.");
   }
 });
+
+async function loadAiProviderStatus(){
+  const el=document.querySelector("#aiProviderStatus");
+  if(!el) return;
+  try{
+    const s=await api("/ai/status");
+    if(s.provider==="groq" && s.configured){
+      el.textContent=`IA online conectada · Groq · ${s.model||"modelo ativo"}`;
+    }else{
+      el.textContent="IA online não configurada · usando fallback";
+    }
+  }catch(e){
+    el.textContent="Status da IA indisponível";
+  }
+}
+document.addEventListener("DOMContentLoaded",()=>{ setTimeout(loadAiProviderStatus,800); });
