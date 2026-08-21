@@ -1,5 +1,5 @@
-const CACHE="falaorcamento-static-v1618";
-const STATIC=["/","/index.html","/style.css?v=1618","/app.js?v=1618","/manifest.webmanifest","/icons/icon-192.png","/icons/icon-512.png"];
+const CACHE="falaorcamento-static-v1619";
+const STATIC=["/","/index.html","/style.css?v=1619","/app.js?v=1619","/manifest.webmanifest","/icons/icon-192.png","/icons/icon-512.png"];
 
 self.addEventListener("install",event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(STATIC)).then(()=>self.skipWaiting()));
