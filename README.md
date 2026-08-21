@@ -1,4 +1,4 @@
-# FalaOrçamento v1.6.25 — associação robusta de itens
+# FalaOrçamento v1.6.26 — associação robusta de itens
 
 Baseada na v1.6.24 validada no Render. Esta versão preserva autenticação, PostgreSQL, multiempresa, Google OAuth, Brevo, PDF, WhatsApp e PWA.
 

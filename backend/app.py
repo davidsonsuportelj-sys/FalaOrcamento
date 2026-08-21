@@ -662,10 +662,20 @@ def _extract_strong_text_items(original_text):
 
 
 def _repair_items_from_text(original_text, items):
-    """v1.6.25: corrige associação descrição/valor somente com evidência textual forte."""
+    """v1.6.26: corrige associação descrição/valor somente com evidência textual forte."""
     candidates=_extract_strong_text_items(original_text)
     if not candidates:
         return items
+
+    # v1.6.26: preço global/lote pode fazer a IA fundir o item seguinte e deslocar preços.
+    # Se a fala contém preço global explícito e o extrator determinístico encontrou
+    # ações + preços inequívocos, a sequência textual ancorada prevalece.
+    has_global_price = bool(re.search(
+        r"\b(?:o\s+)?servi[cç]o\s+todo\s+fica\s+em\b|\bvalor\s+total\b|\bpre[cç]o\s+fechado\b",
+        str(original_text or ""), flags=re.I
+    ))
+    if has_global_price and len(candidates) >= 2:
+        return [dict(x) for x in candidates]
 
     def sig(seq):
         return [(round(float(x.get("qty",1) or 1),2), round(float(x.get("unit",0) or 0),2)) for x in seq]
@@ -1177,7 +1187,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.25"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.26"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1189,7 +1199,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.25"
+        "version": "1.6.26"
     })
 
 
@@ -1201,7 +1211,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.25"
+        "version": "1.6.26"
     })
 
 
@@ -1492,7 +1502,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.25"
+        "version": "1.6.26"
     })
 
 
@@ -1548,7 +1558,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.25"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.26"})
 
 
 
@@ -1568,7 +1578,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.25"
+        "version":"1.6.26"
     })
 
 
@@ -1629,7 +1639,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.25"
+        "version": "1.6.26"
     })
 
 
@@ -2135,5 +2145,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.25 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.26 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
