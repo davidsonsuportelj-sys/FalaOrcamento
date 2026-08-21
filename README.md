@@ -1,11 +1,18 @@
-# FalaOrçamento v1.6.21 — Groq corrigida
+# FalaOrçamento v1.6.23 — correção determinística das descrições
 
-Correções:
-- IA deve preservar o nome específico dos serviços/produtos na descrição dos itens;
-- instrução explícita para não retornar descrições genéricas como “Serviço” quando houver descrição no texto;
-- status técnico “IA local indisponível” removido da experiência principal;
-- diagnóstico da IA permanece disponível pelo backend `/api/ai/status`;
-- PostgreSQL, Google Login, Brevo/SMTP, PDF, PWA e logout preservados.
+A v1.6.22 não reconhecia construções nominais como:
+- `instalação de 3 tomadas a 80 reais cada`
+- `troca de disjuntor por 150 reais`
 
-Render Start Command:
-`gunicorn backend.app:app`
+A v1.6.23 corrige isso no backend, depois da resposta da IA:
+- preserva quantidade e valor;
+- substitui somente descrições genéricas;
+- reconhece `instalação de`, `troca de`, `limpeza de`, `pintura de`, `reparo de`,
+  reposicionamento e formas verbais equivalentes;
+- não depende de a Groq obedecer ao prompt.
+
+Teste automatizado incluído confirmou:
+`Cliente João, instalação de 3 tomadas a 80 reais cada e troca de disjuntor por 150 reais`
+=> `Instalação de tomadas` + `Troca de disjuntor`.
+
+O status técnico foi retirado do cabeçalho comercial.
