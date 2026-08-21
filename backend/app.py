@@ -435,7 +435,7 @@ def security_headers(resp):
 
 
 def _recover_specific_item_names(original_text, items):
-    """Corrige apenas descrições genéricas usando a fala original, sem alterar preço/quantidade."""
+    """Recupera descrições genéricas por posição/preço na fala, sem alterar qty/unit."""
     raw=" ".join(str(original_text or "").strip().split())
     if not raw or not items:
         return items
@@ -445,100 +445,104 @@ def _recover_specific_item_names(original_text, items):
         "serviço informado","servico informado","novo serviço","novo servico"
     }
 
-    # Normaliza conectores entre serviços para facilitar a extração.
-    text=re.sub(r"\s+", " ", raw)
-    text=re.sub(
-        r"\s+\be\b\s+(?=(?:instala(?:ção|cao)|troca|substitui(?:ção|cao)|limpeza|pintura|reparo|conserto|"
-        r"reposicionamento|mudança|mudanca|instalei|instalar|troquei|trocar|limpei|limpar|pintei|pintar|"
-        r"consertei|consertar|reparei|reparar|mudei|mover|reposicionei|reposicionar)\b)",
-        ", ",
-        text,
-        flags=re.I
-    )
-    chunks=[c.strip() for c in re.split(r"[,;.]",
-        text) if c.strip()]
-
-    candidates=[]
+    # Divide a fala em segmentos de serviço usando conectores comuns da linguagem natural.
+    text=raw
+    text=re.sub(r"\s+", " ", text)
+    text=re.sub(r"\b(?:também|tambem)\s+(?:preciso|vou|irei)\s+", ", ", text, flags=re.I)
+    text=re.sub(r"\s+e\s+(?=(?:aplica(?:ção|cao)|assentamento|reboco|instala(?:ção|cao)|troca|substitui(?:ção|cao)|limpeza|pintura|reparo|conserto|revis(?:ão|ao)|"
+                r"reposicionamento|mudança|mudanca|fazer|faço|vou|preciso|instalei|instalar|troquei|trocar|limpei|limpar|pintei|pintar|"
+                r"consertei|consertar|reparei|reparar|revisar|assentar|aplicar|mudei|mover|reposicionei|reposicionar)\b)",
+                ", ", text, flags=re.I)
+    chunks=[c.strip() for c in re.split(r"[,;.]", text) if c.strip()]
 
     action_patterns=[
-        # substantivos
-        (r"^(?:instalação|instalacao)\s+de\s+(.+)$", "Instalação de {}"),
-        (r"^troca\s+de\s+(.+)$", "Troca de {}"),
-        (r"^(?:substituição|substituicao)\s+de\s+(.+)$", "Substituição de {}"),
-        (r"^limpeza\s+de\s+(.+)$", "Limpeza de {}"),
-        (r"^pintura\s+de\s+(.+)$", "Pintura de {}"),
-        (r"^(?:reparo|conserto)\s+de\s+(.+)$", "Reparo de {}"),
-        (r"^(?:reposicionamento|mudança|mudanca)\s+de\s+(.+)$", "Reposicionamento de {}"),
-        # verbos
-        (r"^(?:instalei|instalar)\s+(?:a|o|as|os)?\s*(.+)$", "Instalação de {}"),
-        (r"^(?:troquei|trocar)\s+(?:a|o|as|os)?\s*(.+)$", "Troca de {}"),
-        (r"^(?:limpei|limpar)\s+(?:a|o|as|os)?\s*(.+)$", "Limpeza de {}"),
-        (r"^(?:pintei|pintar)\s+(?:a|o|as|os)?\s*(.+)$", "Pintura de {}"),
-        (r"^(?:consertei|consertar|reparei|reparar)\s+(?:a|o|as|os)?\s*(.+)$", "Reparo de {}"),
-        (r"^(?:mudei|mover|reposicionei|reposicionar)\s+(?:a|o|as|os)?\s*(.+)$", "Reposicionamento de {}"),
+        (r"(?:^|\b)(?:instalação|instalacao)\s+de\s+(.+)$", "Instalação de {}"),
+        (r"(?:^|\b)troca\s+(?:de|do|da|dos|das)\s+(.+)$", "Troca de {}"),
+        (r"(?:^|\b)(?:substituição|substituicao)\s+(?:de|do|da|dos|das)\s+(.+)$", "Substituição de {}"),
+        (r"(?:^|\b)limpeza\s+(?:de|do|da|dos|das)\s+(.+)$", "Limpeza de {}"),
+        (r"(?:^|\b)pintura\s+(?:de|do|da|dos|das)\s+(.+)$", "Pintura de {}"),
+        (r"(?:^|\b)(?:aplicação|aplicacao)\s+de\s+(.+)$", "Aplicação de {}"),
+        (r"(?:^|\b)assentamento\s+de\s+(.+)$", "Assentamento de {}"),
+        (r"(?:^|\b)reboco\s+(?:de|do|da)\s+(.+)$", "Reboco de {}"),
+        (r"(?:^|\b)(?:revisão|revisao)\s+(?:de|do|da)\s+(.+)$", "Revisão de {}"),
+        (r"(?:^|\b)(?:reparo|conserto)\s+(?:de|do|da)\s+(.+)$", "Reparo de {}"),
+        (r"(?:^|\b)(?:reposicionamento|mudança|mudanca)\s+de\s+(.+)$", "Reposicionamento de {}"),
+        (r"(?:^|\b)(?:vou\s+)?instalar\s+(?:a|o|as|os)?\s*(.+)$", "Instalação de {}"),
+        (r"(?:^|\b)(?:vou\s+|preciso\s+)?trocar\s+(?:a|o|as|os)?\s*(.+)$", "Troca de {}"),
+        (r"(?:^|\b)(?:vou\s+)?(?:limpar)\s+(?:a|o|as|os)?\s*(.+)$", "Limpeza de {}"),
+        (r"(?:^|\b)(?:vou\s+)?(?:pintar)\s+(?:a|o|as|os)?\s*(.+)$", "Pintura de {}"),
+        (r"(?:^|\b)(?:vou\s+)?aplicar\s+(.+)$", "Aplicação de {}"),
+        (r"(?:^|\b)(?:vou\s+)?assentar\s+(.+)$", "Assentamento de {}"),
+        (r"(?:^|\b)(?:vou\s+)?(?:fazer\s+)?(?:o\s+)?reboco\s+(?:de|do|da)?\s*(.+)$", "Reboco de {}"),
+        (r"(?:^|\b)(?:vou\s+)?revisar\s+(?:a|o|as|os)?\s*(.+)$", "Revisão de {}"),
+        (r"(?:^|\b)(?:vou\s+)?(?:consertar|reparar)\s+(?:a|o|as|os)?\s*(.+)$", "Reparo de {}"),
+        (r"(?:^|\b)(?:mudei|mover|reposicionei|reposicionar)\s+(?:a|o|as|os)?\s*(.+)$", "Reposicionamento de {}"),
     ]
-
     qty_words="um|uma|dois|duas|tr[eê]s|quatro|cinco|seis|sete|oito|nove|dez"
+    candidates=[]
 
     for chunk in chunks:
         c=chunk.strip()
-
-        # Remove identificação do cliente quando vier no mesmo trecho.
-        c=re.sub(
-            r"^(?:cliente\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,3}|"
-            r"fui\s+(?:na|à)\s+casa\s+de\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,3})\s*[-:]?\s*",
-            "",
-            c,
-            flags=re.I
-        ).strip()
-        if not c:
-            continue
-
-        # Remove preço ao final: "a 80 reais cada", "por R$ 150", "150 reais".
-        c=re.sub(
-            r"\s+(?:(?:a|por|de)\s+)?(?:r\$\s*)?\d+(?:[.,]\d{1,2})?"
-            r"\s*(?:reais?)?(?:\s+(?:cada|cada um|a unidade|por unidade))?\s*$",
-            "",
-            c,
-            flags=re.I
-        ).strip()
+        # Remove introdução/cliente sem consumir a ação do serviço.
+        c=re.sub(r"^(?:cliente\s+[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,3}|orçamento\s+para\s+(?:a|o)?\s*[A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,3})\s*[-:]?\s*", "", c, flags=re.I).strip()
+        # Remove expressões conversacionais antes da ação.
+        c=re.sub(r"^(?:eu\s+)?(?:também\s+|tambem\s+)?(?:preciso\s+|irei\s+)?", "", c, flags=re.I).strip()
+        # Remove preço e condições de cobrança do fim, mantendo apenas o serviço.
+        c=re.sub(r"\s+(?:cobrando\s+)?(?:(?:a|por|de)\s+)?(?:r\$\s*)?\d+(?:[.,]\d{1,2})?\s*(?:reais?)?(?:\s+(?:cada|cada um|em cada (?:um|uma)|o metro|por metro|a unidade|por unidade))?\s*$", "", c, flags=re.I).strip()
 
         found=None
         for pat,fmt in action_patterns:
-            m=re.match(pat,c,flags=re.I)
-            if not m:
-                continue
+            m=re.search(pat,c,flags=re.I)
+            if not m: continue
             obj=m.group(1).strip(" -")
-            # Remove quantidade que pertence ao campo qty, não à descrição.
-            obj=re.sub(rf"^(?:{qty_words}|\d+)\s+", "", obj, flags=re.I).strip()
-            # Remove artigos soltos.
-            obj=re.sub(r"^(?:a|o|as|os)\s+", "", obj, flags=re.I).strip()
-            # Remove "de lugar" do objeto quando a ação já é reposicionamento.
+            obj=re.sub(rf"^(?:{qty_words}|\d+)\s+(?:metros?\s+de\s+)?", "", obj, flags=re.I).strip()
+            obj=re.sub(r"^(?:a|o|as|os|uma|um)\s+", "", obj, flags=re.I).strip()
+            obj=re.sub(r"\s+(?:nova|novo|novas|novos)\b", "", obj, flags=re.I).strip()
             if fmt.startswith("Reposicionamento"):
                 obj=re.sub(r"\s+de\s+lugar\s*$","",obj,flags=re.I).strip()
             if obj:
                 found=fmt.format(obj)
             break
-
         if found:
             candidates.append(found[:1].upper()+found[1:])
 
-    # Corrige somente itens genéricos. Quantidade e preço da IA permanecem intactos.
-    candidate_index=0
-    for item in items:
+    # Se a fala produziu exatamente um candidato por item, o alinhamento posicional é confiável:
+    # usamos a descrição derivada da própria fala inclusive para corrigir uma descrição específica
+    # que o modelo tenha associado ao item errado. Qty/unit nunca são alterados aqui.
+    if len(candidates) == len(items):
+        for idx,item in enumerate(items):
+            item["name"]=candidates[idx][:250]
+        return items
+
+    # Em alinhamento incompleto, comportamento conservador: só preenche nomes genéricos.
+    for idx,item in enumerate(items):
         current=str(item.get("name") or "").strip()
         normalized=re.sub(r"\s+"," ",current.lower())
-        if normalized in generic or not normalized:
-            if candidate_index < len(candidates):
-                item["name"]=candidates[candidate_index][:250]
-                candidate_index+=1
-        else:
-            # Mantém alinhamento posicional para itens que já vieram específicos.
-            if candidate_index < len(candidates):
-                candidate_index+=1
-
+        if (normalized in generic or not normalized) and idx < len(candidates):
+            item["name"]=candidates[idx][:250]
     return items
 
+
+def _recover_client_name(original_text, parsed_client):
+    """Corrige apenas cliente ausente/genérico usando formas naturais explícitas da fala."""
+    current=str(parsed_client or "").strip()
+    if current and current.lower() not in {"cliente", "não informado", "nao informado"}:
+        return current
+    text=" ".join(str(original_text or "").strip().split())
+    patterns=[
+        r"\bcliente\s+([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,2})\b",
+        r"\borçamento\s+para\s+(?:a|o)?\s*([A-Za-zÀ-ÿ]+(?:\s+[A-Za-zÀ-ÿ]+){0,2})\b",
+        r"\b(?:para|pro|pra)\s+(?:a|o)?\s*([A-ZÀ-Ý][A-Za-zÀ-ÿ]+)\b",
+    ]
+    for pat in patterns:
+        m=re.search(pat,text,flags=re.I)
+        if m:
+            name=m.group(1).strip(" ,.-")
+            # Evita capturar palavras de ação após o nome em padrões amplos.
+            name=re.split(r"\b(?:vou|instalação|instalacao|troca|pintura|limpeza|reparo|conserto)\b",name,flags=re.I)[0].strip()
+            if name:
+                return name[:180].title()
+    return current or "Cliente"
 
 def _semantic_guardrails(original_text, parsed):
     """Correções conservadoras para erros recorrentes do modelo pequeno local."""
@@ -825,7 +829,7 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
             }), 422
 
         response_data = {
-            "client": str(parsed.get("client") or "Cliente").strip()[:180],
+            "client": _recover_client_name(text, parsed.get("client"))[:180],
             "items": clean_items,
             "notes": str(parsed.get("notes") or "").strip()[:4000],
             "source": active_source,
@@ -995,7 +999,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.23"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.24"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1007,7 +1011,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.23"
+        "version": "1.6.24"
     })
 
 
@@ -1019,7 +1023,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.23"
+        "version": "1.6.24"
     })
 
 
@@ -1310,7 +1314,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.23"
+        "version": "1.6.24"
     })
 
 
@@ -1366,7 +1370,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.23"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.24"})
 
 
 
@@ -1386,7 +1390,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.23"
+        "version":"1.6.24"
     })
 
 
@@ -1447,7 +1451,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.23"
+        "version": "1.6.24"
     })
 
 
@@ -1953,5 +1957,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.23 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.24 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)

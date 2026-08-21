@@ -156,5 +156,5 @@ body.public-mode #client{padding-top:12px}
 .account-auth-info{font-size:12px;color:#667085;margin:6px 0 12px}
 
 
-/* v1.6.23: diagnóstico técnico não aparece no cabeçalho comercial */
+/* v1.6.24: diagnóstico técnico não aparece no cabeçalho comercial */
 .server-state{display:none!important}
