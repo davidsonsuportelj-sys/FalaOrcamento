@@ -403,7 +403,7 @@ def _start_session(user_row, remember=False):
 
 app = Flask(__name__, static_folder=None)
 
-# v1.6.28 security hardening: produção nunca deve iniciar com segredo padrão.
+# v1.6.29 security hardening: produção nunca deve iniciar com segredo padrão.
 if APP_ENV == "production" and SECRET_KEY in {"", "dev-only-change-me", "change-me", "secret"}:
     raise RuntimeError("SECRET_KEY insegura: configure uma chave longa e aleatória no ambiente de produção")
 if APP_ENV == "production" and BOOTSTRAP_ADMIN:
@@ -1268,7 +1268,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.28"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.29"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1280,7 +1280,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.28"
+        "version": "1.6.29"
     })
 
 
@@ -1292,7 +1292,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.28"
+        "version": "1.6.29"
     })
 
 
@@ -1552,7 +1552,7 @@ def password_reset():
     with engine.begin() as conn:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token_hash)).mappings().first()
-        # Compatibilidade temporária com links emitidos antes da v1.6.28.
+        # Compatibilidade temporária com links emitidos antes da v1.6.29.
         if not row:
             row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
         if not row or row["used"] or _aware_utc(row["expires_at"]) < utcnow():
@@ -1588,7 +1588,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.28"
+        "version": "1.6.29"
     })
 
 
@@ -1644,7 +1644,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.28"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.29"})
 
 
 
@@ -1664,7 +1664,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.28"
+        "version":"1.6.29"
     })
 
 
@@ -1725,7 +1725,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.28"
+        "version": "1.6.29"
     })
 
 
@@ -2021,9 +2021,20 @@ def get_quote_by_token(token):
 
 @app.get("/api/quotes/<token>")
 def get_quote(token):
-    # O token aleatório funciona como a chave pública do orçamento.
-    row = get_quote_by_token(token)
+    # v1.6.29: API administrativa é privada. O token público NÃO concede
+    # acesso à API interna; ele só é válido nas rotas /q/<token>.
+    denied = require_admin()
+    if denied:
+        return denied
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(quotes).where(
+                (quotes.c.public_token == token) &
+                (quotes.c.account_id == current_account_id())
+            )
+        ).mappings().first()
     if not row:
+        # 404 evita confirmar para outra conta que o token existe.
         return jsonify({"error": "Orçamento não encontrado"}), 404
     return jsonify(quote_dict(row))
 
@@ -2091,11 +2102,19 @@ def create_quote():
 
 @app.patch("/api/quotes/<token>")
 def update_quote(token):
+    # v1.6.29: toda mutação da API administrativa exige autenticação e tenant.
+    # Aceite/recusa do cliente continua exclusivamente em /q/<token>/respond.
+    denied = require_admin()
+    if denied:
+        return denied
     body = request.get_json(silent=True) or {}
 
     with engine.begin() as conn:
         row = conn.execute(
-            select(quotes).where(quotes.c.public_token == token)
+            select(quotes).where(
+                (quotes.c.public_token == token) &
+                (quotes.c.account_id == current_account_id())
+            )
         ).mappings().first()
 
         if not row:
@@ -2103,14 +2122,9 @@ def update_quote(token):
 
         values={"updated_at":utcnow()}
 
-        # Cliente/itens/observações só podem ser alterados pela área administrativa.
+        # Cliente/itens/observações permanecem restritos à área administrativa.
         editable_fields = any(k in body for k in ("client","items","notes"))
         if editable_fields:
-            denied = require_admin()
-            if denied:
-                return denied
-            if row["account_id"] != current_account_id():
-                return jsonify({"error":"Orçamento não pertence a esta conta"}),403
 
             client = str(body.get("client", row["client"]) or "Cliente").strip()[:180]
             notes = str(body.get("notes", row["notes"]) or "")[:4000]
@@ -2160,12 +2174,18 @@ def update_quote(token):
 
         conn.execute(
             update(quotes)
-            .where(quotes.c.public_token == token)
+            .where(
+                (quotes.c.public_token == token) &
+                (quotes.c.account_id == current_account_id())
+            )
             .values(**values)
         )
 
         updated_row=conn.execute(
-            select(quotes).where(quotes.c.public_token == token)
+            select(quotes).where(
+                (quotes.c.public_token == token) &
+                (quotes.c.account_id == current_account_id())
+            )
         ).mappings().first()
 
     return jsonify(quote_dict(updated_row))
@@ -2231,5 +2251,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.28 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.29 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
