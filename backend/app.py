@@ -402,13 +402,42 @@ def _start_session(user_row, remember=False):
     session.permanent = bool(remember)
 
 app = Flask(__name__, static_folder=None)
+
+# v1.6.28 security hardening: produção nunca deve iniciar com segredo padrão.
+if APP_ENV == "production" and SECRET_KEY in {"", "dev-only-change-me", "change-me", "secret"}:
+    raise RuntimeError("SECRET_KEY insegura: configure uma chave longa e aleatória no ambiente de produção")
+if APP_ENV == "production" and BOOTSTRAP_ADMIN:
+    raise RuntimeError("BOOTSTRAP_ADMIN deve permanecer desativado em produção")
+
 app.secret_key = SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE_CONFIG,
-    PERMANENT_SESSION_LIFETIME=timedelta(days=30)
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+    MAX_CONTENT_LENGTH=2 * 1024 * 1024
 )
+
+@app.before_request
+def reject_cross_site_writes():
+    """Bloqueia escrita cross-site por sessão sem alterar Bearer/mobile ou resposta pública do cliente."""
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.path.startswith("/q/"):
+        return None
+    auth = str(request.headers.get("Authorization") or "")
+    if auth.lower().startswith("bearer "):
+        return None
+    fetch_site = str(request.headers.get("Sec-Fetch-Site") or "").lower()
+    if fetch_site == "cross-site":
+        return jsonify({"error":"Origem da requisição não permitida"}), 403
+    origin = str(request.headers.get("Origin") or "").rstrip("/")
+    if origin:
+        expected = str(PUBLIC_APP_URL or "").rstrip("/")
+        host_origin = request.host_url.rstrip("/")
+        if origin not in {expected, host_origin}:
+            return jsonify({"error":"Origem da requisição não permitida"}), 403
+    return None
 
 @app.after_request
 def security_headers(resp):
@@ -418,6 +447,10 @@ def security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Referrer-Policy"] = "same-origin"
     resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["Permissions-Policy"] = "camera=(), geolocation=(), payment=(), usb=()"
+    resp.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+    if APP_ENV == "production":
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     if request.path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-store, max-age=0"
         resp.headers["Pragma"] = "no-cache"
@@ -1235,7 +1268,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.27"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.28"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1247,7 +1280,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.27"
+        "version": "1.6.28"
     })
 
 
@@ -1259,7 +1292,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.27"
+        "version": "1.6.28"
     })
 
 
@@ -1494,8 +1527,9 @@ def password_forgot():
             .values(used=True)
         )
         token = secrets.token_urlsafe(48)
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         conn.execute(insert(password_reset_tokens).values(
-            user_id=user["id"], token=token, expires_at=utcnow()+timedelta(minutes=30),
+            user_id=user["id"], token=token_hash, expires_at=utcnow()+timedelta(minutes=30),
             used=False, created_at=utcnow()
         ))
     try:
@@ -1516,7 +1550,11 @@ def password_reset():
     if len(password) < 8:
         return jsonify({"error": "A senha deve ter pelo menos 8 caracteres"}), 400
     with engine.begin() as conn:
-        row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token_hash)).mappings().first()
+        # Compatibilidade temporária com links emitidos antes da v1.6.28.
+        if not row:
+            row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
         if not row or row["used"] or _aware_utc(row["expires_at"]) < utcnow():
             return jsonify({"error": "Link de recuperação inválido ou expirado"}), 400
         conn.execute(update(users).where(users.c.id==row["user_id"]).values(password_hash=generate_password_hash(password), auth_provider="email"))
@@ -1550,7 +1588,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.27"
+        "version": "1.6.28"
     })
 
 
@@ -1606,7 +1644,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.27"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.28"})
 
 
 
@@ -1626,7 +1664,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.27"
+        "version":"1.6.28"
     })
 
 
@@ -1687,7 +1725,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.27"
+        "version": "1.6.28"
     })
 
 
@@ -2193,5 +2231,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.27 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.28 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
