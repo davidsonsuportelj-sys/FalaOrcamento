@@ -18,6 +18,7 @@ function go(id){
  window.scrollTo({top:0,behavior:"smooth"});
  if(id==="client") renderClient();
  if(id==="clients") loadClients();
+ if(id==="edit" && adminAuthenticated) loadClients();
  if(id==="tracking") updateTracking();
  if(id==="settings") loadAccountOverview();
 }
@@ -50,11 +51,28 @@ function calc(){
  let t=data.items.reduce((a,b)=>a+(b.qty*b.unit),0);
  $("#total").textContent=brl(t); return t;
 }
-$("#clientName").oninput=e=>{
-  data.client=e.target.value;
-  const chosen=cachedClients.find(c=>c.id===selectedClientId);
-  if(!chosen || chosen.name!==e.target.value) selectedClientId=null;
-};
+function refreshClientSuggestions(){
+  const dl=$("#clientSuggestions");
+  if(!dl)return;
+  dl.innerHTML=cachedClients.map(c=>`<option value="${escapeHtml(c.name||"")}"></option>`).join("");
+}
+function syncSelectedClientFromName(){
+  const value=($("#clientName")?.value||"").trim();
+  const matches=cachedClients.filter(c=>(c.name||"").trim().toLowerCase()===value.toLowerCase());
+  if(matches.length===1){
+    selectedClientId=matches[0].id;
+    data.client=matches[0].name;
+    const hint=$("#selectedClientHint");
+    if(hint)hint.textContent=`✓ Cliente cadastrado selecionado${matches[0].phone?" · telefone disponível para confirmação":" · sem telefone cadastrado"}`;
+  }else{
+    selectedClientId=null;
+    data.client=value;
+    const hint=$("#selectedClientHint");
+    if(hint)hint.textContent=value?"Cliente não vinculado ao cadastro. Selecione um nome existente para habilitar a confirmação.":"Digite o nome ou escolha um cliente cadastrado.";
+  }
+}
+$("#clientName").oninput=e=>{ data.client=e.target.value; syncSelectedClientFromName(); };
+$("#clientName").onchange=()=>syncSelectedClientFromName();
 $("#addItem").onclick=()=>{data.items.push({name:"Novo serviço",qty:1,unit:0,value:0});renderItems()};
 renderItems();
 
@@ -589,6 +607,7 @@ function applyServerQuote(q,target="edit"){
   serverQuote=q;
   activeQuoteId=q.id;
   data.client=q.client;
+  selectedClientId=q.clientId||null;
   data.items=(q.items||[]).map(normalizeItem);
   data.status=q.status||"pending";
   $("#notes").value=q.notes||"";
@@ -829,6 +848,8 @@ async function loadClients(){
   if(!adminAuthenticated)return;
   try{
     cachedClients=await api("/clients");
+    refreshClientSuggestions();
+    syncSelectedClientFromName();
     renderClients();
   }catch(e){
     if(e.status===401)showLogin();
@@ -913,6 +934,8 @@ function useClientInBudget(id){
   selectedClientId=c.id;
   data.client=c.name;
   $("#clientName").value=c.name;
+  refreshClientSuggestions();
+  syncSelectedClientFromName();
   go("edit");
 }
 
@@ -990,7 +1013,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.30 ----------
+// ---------- Conta e empresa v1.6.31 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{

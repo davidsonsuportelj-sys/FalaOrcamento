@@ -158,3 +158,5 @@ body.public-mode #client{padding-top:12px}
 
 /* v1.6.26: diagnóstico técnico não aparece no cabeçalho comercial */
 .server-state{display:none!important}
+
+.client-select-hint{font-size:11px;color:#667085;margin:-4px 0 12px;line-height:1.35}.client-select-hint:empty{display:none}

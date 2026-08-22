@@ -83,7 +83,7 @@
 <div class="app">
   <header class="topbar">
     <div class="brand"><div class="logo">🎙</div><span>Fala<span>Orçamento</span></span></div>
-    <div class="server-state"><span class="dot"></span><span class="state-text">v1.6.30 · PWA</span></div>
+    <div class="server-state"><span class="dot"></span><span class="state-text">v1.6.31 · PWA</span></div>
   </header>
 
   <main>
@@ -114,7 +114,9 @@
       <div class="notice">Confira os itens abaixo antes de enviar.</div>
 
       <label>Cliente</label>
-      <input id="clientName" value="" placeholder="Nome do cliente"/>
+      <input id="clientName" value="" placeholder="Digite ou selecione um cliente cadastrado" list="clientSuggestions" autocomplete="off"/>
+      <datalist id="clientSuggestions"></datalist>
+      <div id="selectedClientHint" class="client-select-hint">Digite o nome ou escolha um cliente cadastrado.</div>
       <label>Itens do orçamento</label>
       <div class="items-head"><span></span><span>Descrição</span><span>Qtd.</span><span>Unitário</span><span></span></div>
       <div id="items"></div>

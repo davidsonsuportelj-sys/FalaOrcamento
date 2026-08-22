@@ -166,6 +166,7 @@ quotes = Table(
     Column("account_id", Integer, ForeignKey("accounts.id"), nullable=True, index=True),
     Column("public_token", String(64), unique=True, nullable=False, index=True),
     Column("client", String(180), nullable=False),
+    Column("client_id", Integer, ForeignKey("clients.id"), nullable=True, index=True),
     Column("items_json", Text, nullable=False),
     Column("notes", Text, nullable=False, default=""),
     Column("total", Float, nullable=False, default=0),
@@ -218,7 +219,8 @@ def _quote_response_hash(token, last4):
     payload = f"quote-response:{token}:{last4}".encode("utf-8")
     return hmac.new(str(SECRET_KEY).encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
-def _resolve_client_phone(conn, account_id, client_name, client_id=None):
+def _resolve_client_row(conn, account_id, client_name, client_id=None):
+    """Resolve cliente somente dentro da conta atual; client_id tem prioridade."""
     row = None
     if client_id not in (None, ""):
         try:
@@ -237,6 +239,10 @@ def _resolve_client_phone(conn, account_id, client_name, client_id=None):
         ).mappings().all()
         if len(rows) == 1:
             row = rows[0]
+    return row
+
+def _resolve_client_phone(conn, account_id, client_name, client_id=None):
+    row = _resolve_client_row(conn, account_id, client_name, client_id)
     return str((row or {}).get("phone") or "")
 
 def _ensure_legacy_columns():
@@ -252,6 +258,7 @@ def _ensure_legacy_columns():
                 conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN account_id INTEGER"))
         if table_name == "quotes":
             quote_additions = {
+                "client_id": "INTEGER",
                 "responded_at": "TIMESTAMP",
                 "response_verify_hash": "VARCHAR(64) DEFAULT ''",
                 "verify_failures": "INTEGER DEFAULT 0",
@@ -303,6 +310,7 @@ def quote_dict(row):
         "id": f"{r['id']:04d}",
         "token": r["public_token"],
         "client": r["client"],
+        "clientId": r.get("client_id"),
         "items": json.loads(r["items_json"]),
         "notes": r["notes"],
         "total": float(r["total"] or 0),
@@ -444,7 +452,7 @@ def _start_session(user_row, remember=False):
 
 app = Flask(__name__, static_folder=None)
 
-# v1.6.30 security hardening: produção nunca deve iniciar com segredo padrão.
+# v1.6.31 security hardening: produção nunca deve iniciar com segredo padrão.
 if APP_ENV == "production" and SECRET_KEY in {"", "dev-only-change-me", "change-me", "secret"}:
     raise RuntimeError("SECRET_KEY insegura: configure uma chave longa e aleatória no ambiente de produção")
 if APP_ENV == "production" and BOOTSTRAP_ADMIN:
@@ -1309,7 +1317,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.30"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.31"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1321,7 +1329,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.30"
+        "version": "1.6.31"
     })
 
 
@@ -1333,7 +1341,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.30"
+        "version": "1.6.31"
     })
 
 
@@ -1593,7 +1601,7 @@ def password_reset():
     with engine.begin() as conn:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token_hash)).mappings().first()
-        # Compatibilidade temporária com links emitidos antes da v1.6.30.
+        # Compatibilidade temporária com links emitidos antes da v1.6.31.
         if not row:
             row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
         if not row or row["used"] or _aware_utc(row["expires_at"]) < utcnow():
@@ -1629,7 +1637,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.30"
+        "version": "1.6.31"
     })
 
 
@@ -1685,7 +1693,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.30"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.31"})
 
 
 
@@ -1705,7 +1713,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.30"
+        "version":"1.6.31"
     })
 
 
@@ -1766,7 +1774,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.30"
+        "version": "1.6.31"
     })
 
 
@@ -2062,7 +2070,7 @@ def get_quote_by_token(token):
 
 @app.get("/api/quotes/<token>")
 def get_quote(token):
-    # v1.6.30: API administrativa é privada. O token público NÃO concede
+    # v1.6.31: API administrativa é privada. O token público NÃO concede
     # acesso à API interna; ele só é válido nas rotas /q/<token>.
     denied = require_admin()
     if denied:
@@ -2122,7 +2130,11 @@ def create_quote():
         if not pr:
             pr = {"name":"","phone":"","doc":""}
         token = uuid.uuid4().hex
-        client_phone = _resolve_client_phone(conn, current_account_id(), client, client_id)
+        client_row = _resolve_client_row(conn, current_account_id(), client, client_id)
+        resolved_client_id = client_row.get("id") if client_row else None
+        if client_row:
+            client = str(client_row.get("name") or client).strip()[:180]
+        client_phone = str((client_row or {}).get("phone") or "")
         last4 = _phone_last4(client_phone)
         response_verify_hash = _quote_response_hash(token, last4) if last4 else ""
         now = utcnow()
@@ -2130,6 +2142,7 @@ def create_quote():
             account_id=current_account_id(),
             public_token=token,
             client=client,
+            client_id=resolved_client_id,
             items_json=json.dumps(clean_items, ensure_ascii=False),
             notes=notes,
             total=round(total, 2),
@@ -2150,7 +2163,7 @@ def create_quote():
 
 @app.patch("/api/quotes/<token>")
 def update_quote(token):
-    # v1.6.30: toda mutação da API administrativa exige autenticação e tenant.
+    # v1.6.31: toda mutação da API administrativa exige autenticação e tenant.
     # Aceite/recusa do cliente continua exclusivamente em /q/<token>/respond.
     denied = require_admin()
     if denied:
@@ -2198,14 +2211,21 @@ def update_quote(token):
                     })
                     total += item_total
 
+            client_row = None
+            if "client" in body or "clientId" in body:
+                client_row = _resolve_client_row(conn, current_account_id(), client, body.get("clientId"))
+                if client_row:
+                    client = str(client_row.get("name") or client).strip()[:180]
+
             values.update({
                 "client":client,
+                "client_id": client_row.get("id") if client_row else (row.get("client_id") if not ("client" in body or "clientId" in body) else None),
                 "items_json":json.dumps(clean_items,ensure_ascii=False),
                 "notes":notes,
                 "total":round(total,2)
             })
             if "client" in body or "clientId" in body:
-                phone = _resolve_client_phone(conn, current_account_id(), client, body.get("clientId"))
+                phone = str((client_row or {}).get("phone") or "")
                 last4 = _phone_last4(phone)
                 values["response_verify_hash"] = _quote_response_hash(token, last4) if last4 else ""
                 values["verify_failures"] = 0
@@ -2352,5 +2372,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.30 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.31 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
