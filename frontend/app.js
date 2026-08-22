@@ -50,7 +50,11 @@ function calc(){
  let t=data.items.reduce((a,b)=>a+(b.qty*b.unit),0);
  $("#total").textContent=brl(t); return t;
 }
-$("#clientName").oninput=e=>data.client=e.target.value;
+$("#clientName").oninput=e=>{
+  data.client=e.target.value;
+  const chosen=cachedClients.find(c=>c.id===selectedClientId);
+  if(!chosen || chosen.name!==e.target.value) selectedClientId=null;
+};
 $("#addItem").onclick=()=>{data.items.push({name:"Novo serviço",qty:1,unit:0,value:0});renderItems()};
 renderItems();
 
@@ -612,6 +616,7 @@ async function createQuoteServer(){
 
   const payload={
     client:data.client,
+    clientId:selectedClientId,
     items:data.items,
     notes:$("#notes").value||"",
     status:"pending"
@@ -818,6 +823,7 @@ $("#showDiagnosticsBtn")?.addEventListener("click",showAIDiagnostics);
 
 // ---------- Clientes ----------
 let cachedClients=[];
+let selectedClientId=null;
 
 async function loadClients(){
   if(!adminAuthenticated)return;
@@ -904,6 +910,7 @@ async function removeClient(id){
 }
 function useClientInBudget(id){
   const c=cachedClients.find(x=>x.id===id); if(!c)return;
+  selectedClientId=c.id;
   data.client=c.name;
   $("#clientName").value=c.name;
   go("edit");
@@ -983,7 +990,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.29 ----------
+// ---------- Conta e empresa v1.6.30 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{

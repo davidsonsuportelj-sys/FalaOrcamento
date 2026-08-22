@@ -175,7 +175,10 @@ quotes = Table(
     Column("provider_doc", String(80), nullable=False, default=""),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
-    Column("responded_at", DateTime(timezone=True), nullable=True)
+    Column("responded_at", DateTime(timezone=True), nullable=True),
+    Column("response_verify_hash", String(64), nullable=False, default=""),
+    Column("verify_failures", Integer, nullable=False, default=0),
+    Column("verify_locked_until", DateTime(timezone=True), nullable=True)
 )
 
 interpretation_logs = Table(
@@ -207,6 +210,35 @@ clients = Table(
 def utcnow():
     return datetime.now(timezone.utc)
 
+def _phone_last4(value):
+    digits = re.sub(r"\D", "", str(value or ""))
+    return digits[-4:] if len(digits) >= 4 else ""
+
+def _quote_response_hash(token, last4):
+    payload = f"quote-response:{token}:{last4}".encode("utf-8")
+    return hmac.new(str(SECRET_KEY).encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
+def _resolve_client_phone(conn, account_id, client_name, client_id=None):
+    row = None
+    if client_id not in (None, ""):
+        try:
+            cid = int(client_id)
+            row = conn.execute(
+                select(clients).where((clients.c.id == cid) & (clients.c.account_id == account_id))
+            ).mappings().first()
+        except (TypeError, ValueError):
+            row = None
+    if not row and client_name:
+        rows = conn.execute(
+            select(clients).where(
+                (clients.c.account_id == account_id) &
+                (func.lower(clients.c.name) == str(client_name).strip().lower())
+            ).limit(2)
+        ).mappings().all()
+        if len(rows) == 1:
+            row = rows[0]
+    return str((row or {}).get("phone") or "")
+
 def _ensure_legacy_columns():
     """Adiciona account_id em bancos antigos sem apagar dados."""
     insp = inspect(engine)
@@ -218,9 +250,17 @@ def _ensure_legacy_columns():
         if "account_id" not in cols:
             with engine.begin() as conn:
                 conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN account_id INTEGER"))
-        if table_name == "quotes" and "responded_at" not in cols:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE quotes ADD COLUMN responded_at TIMESTAMP"))
+        if table_name == "quotes":
+            quote_additions = {
+                "responded_at": "TIMESTAMP",
+                "response_verify_hash": "VARCHAR(64) DEFAULT ''",
+                "verify_failures": "INTEGER DEFAULT 0",
+                "verify_locked_until": "TIMESTAMP"
+            }
+            for col_name, col_type in quote_additions.items():
+                if col_name not in cols:
+                    with engine.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE quotes ADD COLUMN {col_name} {col_type}"))
 
 
 def _create_account(conn, name):
@@ -271,6 +311,7 @@ def quote_dict(row):
         "createdAt": r["created_at"].isoformat() if r["created_at"] else None,
         "updatedAt": r["updated_at"].isoformat() if r["updated_at"] else None,
         "responseAt": _aware_utc(r.get("responded_at")).isoformat() if r.get("responded_at") else None,
+        "verificationRequired": bool(r.get("response_verify_hash")),
         "publicUrl": f"{PUBLIC_APP_URL}/q/{r['public_token']}"
     }
 
@@ -403,7 +444,7 @@ def _start_session(user_row, remember=False):
 
 app = Flask(__name__, static_folder=None)
 
-# v1.6.29 security hardening: produção nunca deve iniciar com segredo padrão.
+# v1.6.30 security hardening: produção nunca deve iniciar com segredo padrão.
 if APP_ENV == "production" and SECRET_KEY in {"", "dev-only-change-me", "change-me", "secret"}:
     raise RuntimeError("SECRET_KEY insegura: configure uma chave longa e aleatória no ambiente de produção")
 if APP_ENV == "production" and BOOTSTRAP_ADMIN:
@@ -1268,7 +1309,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.29"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.30"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1280,7 +1321,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.29"
+        "version": "1.6.30"
     })
 
 
@@ -1292,7 +1333,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.29"
+        "version": "1.6.30"
     })
 
 
@@ -1552,7 +1593,7 @@ def password_reset():
     with engine.begin() as conn:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token_hash)).mappings().first()
-        # Compatibilidade temporária com links emitidos antes da v1.6.29.
+        # Compatibilidade temporária com links emitidos antes da v1.6.30.
         if not row:
             row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
         if not row or row["used"] or _aware_utc(row["expires_at"]) < utcnow():
@@ -1588,7 +1629,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.29"
+        "version": "1.6.30"
     })
 
 
@@ -1644,7 +1685,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.29"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.30"})
 
 
 
@@ -1664,7 +1705,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.29"
+        "version":"1.6.30"
     })
 
 
@@ -1725,7 +1766,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.29"
+        "version": "1.6.30"
     })
 
 
@@ -2021,7 +2062,7 @@ def get_quote_by_token(token):
 
 @app.get("/api/quotes/<token>")
 def get_quote(token):
-    # v1.6.29: API administrativa é privada. O token público NÃO concede
+    # v1.6.30: API administrativa é privada. O token público NÃO concede
     # acesso à API interna; ele só é válido nas rotas /q/<token>.
     denied = require_admin()
     if denied:
@@ -2046,6 +2087,7 @@ def create_quote():
 
     body = request.get_json(silent=True) or {}
     client = str(body.get("client") or "").strip()[:180]
+    client_id = body.get("clientId")
     incoming_items = body.get("items") or []
     notes = str(body.get("notes") or "")[:4000]
 
@@ -2080,6 +2122,9 @@ def create_quote():
         if not pr:
             pr = {"name":"","phone":"","doc":""}
         token = uuid.uuid4().hex
+        client_phone = _resolve_client_phone(conn, current_account_id(), client, client_id)
+        last4 = _phone_last4(client_phone)
+        response_verify_hash = _quote_response_hash(token, last4) if last4 else ""
         now = utcnow()
         result = conn.execute(insert(quotes).values(
             account_id=current_account_id(),
@@ -2092,6 +2137,9 @@ def create_quote():
             provider_name=pr["name"],
             provider_phone=pr["phone"],
             provider_doc=pr["doc"],
+            response_verify_hash=response_verify_hash,
+            verify_failures=0,
+            verify_locked_until=None,
             created_at=now,
             updated_at=now
         ))
@@ -2102,7 +2150,7 @@ def create_quote():
 
 @app.patch("/api/quotes/<token>")
 def update_quote(token):
-    # v1.6.29: toda mutação da API administrativa exige autenticação e tenant.
+    # v1.6.30: toda mutação da API administrativa exige autenticação e tenant.
     # Aceite/recusa do cliente continua exclusivamente em /q/<token>/respond.
     denied = require_admin()
     if denied:
@@ -2123,7 +2171,7 @@ def update_quote(token):
         values={"updated_at":utcnow()}
 
         # Cliente/itens/observações permanecem restritos à área administrativa.
-        editable_fields = any(k in body for k in ("client","items","notes"))
+        editable_fields = any(k in body for k in ("client","clientId","items","notes"))
         if editable_fields:
 
             client = str(body.get("client", row["client"]) or "Cliente").strip()[:180]
@@ -2156,6 +2204,12 @@ def update_quote(token):
                 "notes":notes,
                 "total":round(total,2)
             })
+            if "client" in body or "clientId" in body:
+                phone = _resolve_client_phone(conn, current_account_id(), client, body.get("clientId"))
+                last4 = _phone_last4(phone)
+                values["response_verify_hash"] = _quote_response_hash(token, last4) if last4 else ""
+                values["verify_failures"] = 0
+                values["verify_locked_until"] = None
 
         if "status" in body:
             status=body.get("status")
@@ -2190,7 +2244,8 @@ def update_quote(token):
 
     return jsonify(quote_dict(updated_row))
 
-def _public_quote_html(row):
+def _public_quote_html(row, verification_error=""):
+
     q = quote_dict(row)
     status = str(q.get("status") or "pending")
     status_label = {"accepted":"ACEITO","rejected":"RECUSADO"}.get(status,"PENDENTE")
@@ -2202,7 +2257,23 @@ def _public_quote_html(row):
     total_text = f'{float(q.get("total") or 0):,.2f}'.replace(",", "X").replace(".", ",").replace("X", ".")
     response_at = q.get("responseAt") or ""
     if status == "pending":
-        actions = '<form method="post" action="/q/'+str(escape(str(q["token"])))+'/respond" class="actions">' + '<button class="accept" name="status" value="accepted" type="submit">✓ ACEITAR ORÇAMENTO</button>' + '<button class="reject" name="status" value="rejected" type="submit">✕ RECUSAR</button></form>'
+        verification_enabled = bool(dict(row).get("response_verify_hash"))
+        locked_until = _aware_utc(dict(row).get("verify_locked_until"))
+        locked = bool(locked_until and locked_until > utcnow())
+        if verification_enabled and not locked:
+            err = f'<div class="verify-error">{escape(str(verification_error))}</div>' if verification_error else ''
+            actions = (
+                '<form method="post" action="/q/'+str(escape(str(q["token"])))+'/respond" class="actions">'
+                '<div class="verify-box"><b>Confirme sua identidade</b><span>Informe os 4 últimos dígitos do telefone cadastrado com o prestador.</span>'
+                + err +
+                '<input class="verify-input" name="phone_last4" inputmode="numeric" autocomplete="one-time-code" maxlength="4" pattern="[0-9]{4}" placeholder="••••" required></div>'
+                '<button class="accept" name="status" value="accepted" type="submit">✓ ACEITAR ORÇAMENTO</button>'
+                '<button class="reject" name="status" value="rejected" type="submit">✕ RECUSAR</button></form>'
+            )
+        elif locked:
+            actions = '<div class="response rejected">Muitas tentativas incorretas.<small>Tente novamente em alguns minutos.</small></div>'
+        else:
+            actions = '<div class="response pending">Confirmação indisponível.<small>Peça ao prestador para cadastrar seu telefone e reenviar o orçamento.</small></div>'
     else:
         msg = "Orçamento aceito." if status == "accepted" else "Orçamento recusado."
         actions = f'<div class="response {status_class}">✓ {escape(msg)}' + (f'<small>Resposta registrada em {escape(response_at)}</small>' if response_at else '') + '</div>'
@@ -2212,7 +2283,7 @@ def _public_quote_html(row):
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Orçamento #{escape(str(q['id']))} · FalaOrçamento</title><meta name="theme-color" content="#4f46e5">
-<style>*{{box-sizing:border-box}}body{{margin:0;background:#f5f7ff;color:#101828;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px 14px}}.wrap{{max-width:520px;margin:0 auto}}.brand{{display:flex;align-items:center;justify-content:center;gap:10px;font-size:22px;font-weight:800;margin:8px 0 22px}}.logo{{width:38px;height:38px;border-radius:12px;background:#5b4df6;color:white;display:grid;place-items:center;box-shadow:0 8px 24px rgba(79,70,229,.22)}}.brand span{{color:#5b4df6}}.card{{background:#fff;border:1px solid #e4e7ec;border-radius:18px;padding:18px;box-shadow:0 12px 35px rgba(16,24,40,.06)}}.head{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}}h1{{font-size:20px;margin:0}}.badge{{font-size:11px;font-weight:800;padding:6px 9px;border-radius:7px}}.pending{{background:#fff1c7;color:#8a6100}}.accepted{{background:#dff7e7;color:#087a38}}.rejected{{background:#fee4e2;color:#b42318}}.meta{{font-size:13px;line-height:1.5;margin:15px 0}}.meta b{{display:block;margin-bottom:2px}}.item{{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid #eef0f5;padding:12px 0;font-size:14px}}.item b{{white-space:nowrap}}.total{{display:flex;align-items:end;justify-content:space-between;padding-top:18px;font-size:15px}}.total strong{{font-size:25px}}.notes{{font-size:13px;background:#f8f9fc;border-radius:10px;padding:12px;margin-top:14px}}.actions{{display:grid;gap:10px;margin-top:12px}}button{{width:100%;padding:14px 12px;border-radius:11px;font-weight:800;font-size:14px;cursor:pointer}}.accept{{background:#2dbd68;color:white;border:1px solid #2dbd68}}.reject{{background:white;color:#e43c3c;border:1px solid #ff5b5b}}.response{{margin-top:12px;border-radius:11px;padding:14px;text-align:center;font-weight:800}}.response.accepted{{background:#e7f8ed;color:#087a38}}.response.rejected{{background:#feeceb;color:#b42318}}.response small{{display:block;font-weight:500;margin-top:5px;opacity:.8}}.footer{{text-align:center;color:#98a2b3;font-size:11px;margin:18px 0}}</style></head><body><main class="wrap"><div class="brand"><div class="logo">🎙</div>Fala<span>Orçamento</span></div><section class="card"><div class="head"><h1>Orçamento #{escape(str(q['id']))}</h1><span class="badge {status_class}">{status_label}</span></div><div class="meta"><b>Prestador</b>{escape(str(provider.get('name') or 'Prestador'))}<br>{escape(str(provider.get('phone') or ''))}<br>{escape(str(provider.get('doc') or ''))}</div><div class="meta"><b>Cliente</b>{escape(str(q.get('client') or 'Cliente'))}</div>{items_html}<div class="total"><span>Total</span><strong>R$ {total_text}</strong></div>{notes_html}</section>{actions}<div class="footer">Orçamento digital gerado pelo FalaOrçamento.</div></main></body></html>"""
+<style>*{{box-sizing:border-box}}body{{margin:0;background:#f5f7ff;color:#101828;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px 14px}}.wrap{{max-width:520px;margin:0 auto}}.brand{{display:flex;align-items:center;justify-content:center;gap:10px;font-size:22px;font-weight:800;margin:8px 0 22px}}.logo{{width:38px;height:38px;border-radius:12px;background:#5b4df6;color:white;display:grid;place-items:center;box-shadow:0 8px 24px rgba(79,70,229,.22)}}.brand span{{color:#5b4df6}}.card{{background:#fff;border:1px solid #e4e7ec;border-radius:18px;padding:18px;box-shadow:0 12px 35px rgba(16,24,40,.06)}}.head{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}}h1{{font-size:20px;margin:0}}.badge{{font-size:11px;font-weight:800;padding:6px 9px;border-radius:7px}}.pending{{background:#fff1c7;color:#8a6100}}.accepted{{background:#dff7e7;color:#087a38}}.rejected{{background:#fee4e2;color:#b42318}}.meta{{font-size:13px;line-height:1.5;margin:15px 0}}.meta b{{display:block;margin-bottom:2px}}.item{{display:flex;justify-content:space-between;gap:16px;border-bottom:1px solid #eef0f5;padding:12px 0;font-size:14px}}.item b{{white-space:nowrap}}.total{{display:flex;align-items:end;justify-content:space-between;padding-top:18px;font-size:15px}}.total strong{{font-size:25px}}.notes{{font-size:13px;background:#f8f9fc;border-radius:10px;padding:12px;margin-top:14px}}.actions{{display:grid;gap:10px;margin-top:12px}}.verify-box{{background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:14px;display:grid;gap:7px;font-size:13px}}.verify-box span{{color:#667085;font-size:12px;line-height:1.4}}.verify-input{{width:100%;font-size:22px;letter-spacing:8px;text-align:center;padding:11px;border:1px solid #cfd4dc;border-radius:9px;outline:none}}.verify-input:focus{{border-color:#5b4df6;box-shadow:0 0 0 3px rgba(91,77,246,.12)}}.verify-error{{background:#feeceb;color:#b42318;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:700}}button{{width:100%;padding:14px 12px;border-radius:11px;font-weight:800;font-size:14px;cursor:pointer}}.accept{{background:#2dbd68;color:white;border:1px solid #2dbd68}}.reject{{background:white;color:#e43c3c;border:1px solid #ff5b5b}}.response{{margin-top:12px;border-radius:11px;padding:14px;text-align:center;font-weight:800}}.response.accepted{{background:#e7f8ed;color:#087a38}}.response.rejected{{background:#feeceb;color:#b42318}}.response small{{display:block;font-weight:500;margin-top:5px;opacity:.8}}.footer{{text-align:center;color:#98a2b3;font-size:11px;margin:18px 0}}</style></head><body><main class="wrap"><div class="brand"><div class="logo">🎙</div>Fala<span>Orçamento</span></div><section class="card"><div class="head"><h1>Orçamento #{escape(str(q['id']))}</h1><span class="badge {status_class}">{status_label}</span></div><div class="meta"><b>Prestador</b>{escape(str(provider.get('name') or 'Prestador'))}<br>{escape(str(provider.get('phone') or ''))}<br>{escape(str(provider.get('doc') or ''))}</div><div class="meta"><b>Cliente</b>{escape(str(q.get('client') or 'Cliente'))}</div>{items_html}<div class="total"><span>Total</span><strong>R$ {total_text}</strong></div>{notes_html}</section>{actions}<div class="footer">Orçamento digital gerado pelo FalaOrçamento.</div></main></body></html>"""
 
 @app.get("/q/<token>")
 def public_quote_page(token):
@@ -2224,15 +2295,45 @@ def public_quote_page(token):
 @app.post("/q/<token>/respond")
 def public_quote_respond(token):
     status = str(request.form.get("status") or "").strip().lower()
+    supplied_last4 = _phone_last4(request.form.get("phone_last4"))
     if status not in {"accepted","rejected"}:
         return redirect(f"/q/{token}", code=303)
+
     with engine.begin() as conn:
         row = conn.execute(select(quotes).where(quotes.c.public_token == token)).mappings().first()
         if not row:
             return ("Orçamento não encontrado.", 404, {"Content-Type":"text/plain; charset=utf-8"})
+
         current = str(row["status"] or "pending")
-        if current == "pending":
-            conn.execute(update(quotes).where(quotes.c.public_token == token).values(status=status, responded_at=utcnow(), updated_at=utcnow()))
+        if current != "pending":
+            return redirect(f"/q/{token}", code=303)
+
+        verify_hash = str(row.get("response_verify_hash") or "")
+        if not verify_hash:
+            return (_public_quote_html(row, "Confirmação não configurada para este orçamento."), 403, {"Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store"})
+
+        locked_until = _aware_utc(row.get("verify_locked_until"))
+        if locked_until and locked_until > utcnow():
+            return (_public_quote_html(row), 429, {"Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store"})
+
+        expected = _quote_response_hash(token, supplied_last4) if supplied_last4 else ""
+        if not supplied_last4 or not hmac.compare_digest(verify_hash, expected):
+            failures = int(row.get("verify_failures") or 0) + 1
+            values = {"verify_failures": failures, "updated_at": utcnow()}
+            if failures >= 5:
+                values["verify_locked_until"] = utcnow() + timedelta(minutes=15)
+                values["verify_failures"] = 0
+            conn.execute(update(quotes).where(quotes.c.public_token == token).values(**values))
+            refreshed = conn.execute(select(quotes).where(quotes.c.public_token == token)).mappings().first()
+            message = "Código incorreto. Confira os 4 últimos dígitos do telefone."
+            return (_public_quote_html(refreshed, message), 403, {"Content-Type":"text/html; charset=utf-8", "Cache-Control":"no-store"})
+
+        conn.execute(
+            update(quotes).where(quotes.c.public_token == token).values(
+                status=status, responded_at=utcnow(), updated_at=utcnow(),
+                verify_failures=0, verify_locked_until=None
+            )
+        )
     return redirect(f"/q/{token}", code=303)
 
 
@@ -2251,5 +2352,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.29 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.30 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
