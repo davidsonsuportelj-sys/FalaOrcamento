@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <meta name="theme-color" content="#4f46e5"/>
   <title>FalaOrçamento</title>
-  <link rel="stylesheet" href="style.css?v=1630"/>
+  <link rel="stylesheet" href="style.css?v=1632"/>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -83,7 +83,7 @@
 <div class="app">
   <header class="topbar">
     <div class="brand"><div class="logo">🎙</div><span>Fala<span>Orçamento</span></span></div>
-    <div class="server-state"><span class="dot"></span><span class="state-text">v1.6.31 · PWA</span></div>
+    <div class="server-state"><span class="dot"></span><span class="state-text">v1.6.32 · PWA</span></div>
   </header>
 
   <main>
@@ -117,6 +117,9 @@
       <input id="clientName" value="" placeholder="Digite ou selecione um cliente cadastrado" list="clientSuggestions" autocomplete="off"/>
       <datalist id="clientSuggestions"></datalist>
       <div id="selectedClientHint" class="client-select-hint">Digite o nome ou escolha um cliente cadastrado.</div>
+      <label>WhatsApp do cliente</label>
+      <input id="clientPhone" value="" placeholder="(00) 00000-0000" inputmode="tel" autocomplete="tel"/>
+      <div id="clientPhoneHint" class="client-select-hint">Se o número já existir, o cadastro será reutilizado. Se não existir, será criado ao enviar.</div>
       <label>Itens do orçamento</label>
       <div class="items-head"><span></span><span>Descrição</span><span>Qtd.</span><span>Unitário</span><span></span></div>
       <div id="items"></div>
@@ -266,6 +269,6 @@
     <button data-go="settings">⚙<span>Negócio</span></button>
   </nav>
 </div>
-<script src="app.js?v=1630"></script>
+<script src="app.js?v=1632"></script>
 </body>
 </html>

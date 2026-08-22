@@ -51,28 +51,76 @@ function calc(){
  let t=data.items.reduce((a,b)=>a+(b.qty*b.unit),0);
  $("#total").textContent=brl(t); return t;
 }
+function phoneDigits(v){return String(v||"").replace(/\D/g,"")}
+function phoneMatchKey(v){
+  let d=phoneDigits(v);
+  if(d.startsWith("55")&&(d.length===12||d.length===13))d=d.slice(2);
+  return d;
+}
+function clientOptionLabel(c){
+  const d=phoneDigits(c.phone||"");
+  return `${c.name||"Cliente"} — ${d.length>=4?"final "+d.slice(-4):"sem telefone"}`;
+}
+function whatsappNumber(v){
+  let d=phoneDigits(v);
+  if(d.length===10||d.length===11)d="55"+d;
+  return d;
+}
+function whatsappUrl(q,phone){
+  const n=whatsappNumber(phone);
+  const text=`Olá ${q.client}! Segue seu orçamento #${q.id}, no valor de ${brl(q.total)}.\n\n${publicUrl(q)}`;
+  return `https://wa.me/${n}?text=${encodeURIComponent(text)}`;
+}
 function refreshClientSuggestions(){
   const dl=$("#clientSuggestions");
   if(!dl)return;
-  dl.innerHTML=cachedClients.map(c=>`<option value="${escapeHtml(c.name||"")}"></option>`).join("");
+  dl.innerHTML=cachedClients.map(c=>`<option value="${escapeHtml(clientOptionLabel(c))}"></option>`).join("");
+}
+function setClientPhoneHint(text){const el=$("#clientPhoneHint");if(el)el.textContent=text}
+function syncClientFromPhone(updateName=true){
+  const phone=$("#clientPhone")?.value||"";
+  const key=phoneMatchKey(phone);
+  if(key.length<8){setClientPhoneHint("Informe o WhatsApp para enviar e habilitar a confirmação do cliente.");return}
+  const matches=cachedClients.filter(c=>phoneMatchKey(c.phone)===key);
+  if(matches.length===1){
+    const c=matches[0];
+    selectedClientId=c.id;
+    data.client=c.name;
+    if(updateName&&$("#clientName"))$("#clientName").value=c.name;
+    const hint=$("#selectedClientHint"); if(hint)hint.textContent=`✓ Cliente existente identificado pelo WhatsApp: ${c.name}`;
+    setClientPhoneHint("Cadastro existente será reutilizado; nenhum cliente duplicado será criado.");
+  }else if(matches.length>1){
+    selectedClientId=null;
+    setClientPhoneHint("Este WhatsApp aparece em mais de um cadastro. Selecione o cliente correto na lista.");
+  }else if(!selectedClientId){
+    setClientPhoneHint("Novo cliente será cadastrado automaticamente quando o orçamento for enviado.");
+  }
 }
 function syncSelectedClientFromName(){
-  const value=($("#clientName")?.value||"").trim();
-  const matches=cachedClients.filter(c=>(c.name||"").trim().toLowerCase()===value.toLowerCase());
-  if(matches.length===1){
-    selectedClientId=matches[0].id;
-    data.client=matches[0].name;
-    const hint=$("#selectedClientHint");
-    if(hint)hint.textContent=`✓ Cliente cadastrado selecionado${matches[0].phone?" · telefone disponível para confirmação":" · sem telefone cadastrado"}`;
+  const input=$("#clientName");
+  const value=(input?.value||"").trim();
+  const byLabel=cachedClients.find(c=>clientOptionLabel(c).toLowerCase()===value.toLowerCase());
+  const byName=cachedClients.filter(c=>(c.name||"").trim().toLowerCase()===value.toLowerCase());
+  const match=byLabel||(byName.length===1?byName[0]:null);
+  const hint=$("#selectedClientHint");
+  if(match){
+    selectedClientId=match.id;
+    data.client=match.name;
+    if(input&&input.value!==match.name)input.value=match.name;
+    if($("#clientPhone"))$("#clientPhone").value=match.phone||"";
+    if(hint)hint.textContent=`✓ ${match.name} selecionado${match.phone?" · final "+phoneDigits(match.phone).slice(-4):" · sem telefone"}`;
+    setClientPhoneHint(match.phone?"O WhatsApp cadastrado será usado no envio e na confirmação.":"Informe o WhatsApp para completar este cadastro ao enviar.");
   }else{
     selectedClientId=null;
     data.client=value;
-    const hint=$("#selectedClientHint");
-    if(hint)hint.textContent=value?"Cliente não vinculado ao cadastro. Selecione um nome existente para habilitar a confirmação.":"Digite o nome ou escolha um cliente cadastrado.";
+    if(hint)hint.textContent=byName.length>1?"Há clientes com o mesmo nome. Escolha na lista pelo final do telefone.":(value?"Novo cliente ou cadastro ainda não identificado pelo telefone.":"Digite o nome ou escolha um cliente cadastrado.");
+    syncClientFromPhone(false);
   }
 }
 $("#clientName").oninput=e=>{ data.client=e.target.value; syncSelectedClientFromName(); };
 $("#clientName").onchange=()=>syncSelectedClientFromName();
+$("#clientPhone")?.addEventListener("input",()=>syncClientFromPhone(false));
+$("#clientPhone")?.addEventListener("change",()=>syncClientFromPhone(true));
 $("#addItem").onclick=()=>{data.items.push({name:"Novo serviço",qty:1,unit:0,value:0});renderItems()};
 renderItems();
 
@@ -612,6 +660,7 @@ function applyServerQuote(q,target="edit"){
   data.status=q.status||"pending";
   $("#notes").value=q.notes||"";
   $("#clientName").value=q.client||"Cliente";
+  if($("#clientPhone"))$("#clientPhone").value=q.clientPhone||"";
   renderItems();
   updateTracking();
   if(target==="tracking")updateShareBoxServer(q);
@@ -636,6 +685,7 @@ async function createQuoteServer(){
   const payload={
     client:data.client,
     clientId:selectedClientId,
+    clientPhone:$("#clientPhone")?.value||"",
     items:data.items,
     notes:$("#notes").value||"",
     status:"pending"
@@ -659,6 +709,10 @@ async function createQuoteServer(){
   serverQuote=q;
   activeQuoteId=q.id;
   data.status=q.status;
+  selectedClientId=q.clientId||selectedClientId;
+  if($("#clientName"))$("#clientName").value=q.client||data.client;
+  if($("#clientPhone")&&q.clientPhone!=null)$("#clientPhone").value=q.clientPhone||"";
+  if(q.clientCreated)setClientPhoneHint("✓ Cliente cadastrado automaticamente com este WhatsApp.");
   await renderHistoryServer();
   updateShareBoxServer(q);
   return q;
@@ -667,36 +721,29 @@ async function createQuoteServer(){
 if($("#sendBtn")) $("#sendBtn").onclick=async()=>{
   const btn=$("#sendBtn");
   if(btn?.dataset.busy==="1")return;
-
+  let waWindow=null;
   try{
-    if(!backendOnline){
-      alert("Servidor indisponível.");
-      return;
-    }
-    if(!adminAuthenticated){
-      showLogin();
-      return;
-    }
+    if(!backendOnline){alert("Servidor indisponível.");return}
+    if(!adminAuthenticated){showLogin();return}
     if(window.validateBudget && !validateBudget(true))return;
-
-    if(btn){
-      btn.dataset.busy="1";
-      btn.disabled=true;
-      btn.textContent=serverQuote?.token?"ATUALIZANDO…":"SALVANDO…";
-    }
-
+    const phone=$("#clientPhone")?.value||"";
+    if(phoneMatchKey(phone).length<8){alert("Informe o WhatsApp do cliente para enviar o orçamento.");$("#clientPhone")?.focus();return}
+    waWindow=window.open("about:blank","_blank");
+    if(btn){btn.dataset.busy="1";btn.disabled=true;btn.textContent=serverQuote?.token?"ATUALIZANDO…":"SALVANDO…"}
     const q=await createQuoteServer();
     updateShareBoxServer(q);
+    const destination=q.clientPhone||$("#clientPhone")?.value||"";
+    if(whatsappNumber(destination).length<10)throw new Error("WhatsApp do cliente inválido.");
+    if(waWindow)waWindow.location.href=whatsappUrl(q,destination);
+    else window.open(whatsappUrl(q,destination),"_blank");
     go("tracking");
+    loadClients().catch(()=>{});
   }catch(e){
+    if(waWindow&&!waWindow.closed)waWindow.close();
     if(e.status===401)showLogin();
-    else alert("Não consegui salvar o orçamento: "+e.message);
+    else alert("Não consegui enviar o orçamento: "+e.message);
   }finally{
-    if(btn){
-      btn.dataset.busy="0";
-      btn.disabled=false;
-      btn.textContent="ENVIAR NO WHATSAPP";
-    }
+    if(btn){btn.dataset.busy="0";btn.disabled=false;btn.textContent="ENVIAR NO WHATSAPP"}
   }
 };
 
@@ -715,8 +762,10 @@ if($("#copyLink")) $("#copyLink").onclick=async()=>{
 
 if($("#whatsShare")) $("#whatsShare").onclick=()=>{
   if(!serverQuote)return;
-  const text=`Olá ${serverQuote.client}! Segue seu orçamento #${serverQuote.id}, no valor de ${brl(serverQuote.total)}.\n\n${publicUrl(serverQuote)}`;
-  window.open("https://wa.me/?text="+encodeURIComponent(text),"_blank");
+  const linked=cachedClients.find(c=>c.id===serverQuote.clientId);
+  const phone=serverQuote.clientPhone||linked?.phone||$("#clientPhone")?.value||"";
+  if(phoneMatchKey(phone).length<8)return alert("Cadastre o WhatsApp do cliente antes de compartilhar.");
+  window.open(whatsappUrl(serverQuote,phone),"_blank");
 };
 
 async function setServerStatus(status){
@@ -934,6 +983,7 @@ function useClientInBudget(id){
   selectedClientId=c.id;
   data.client=c.name;
   $("#clientName").value=c.name;
+  if($("#clientPhone"))$("#clientPhone").value=c.phone||"";
   refreshClientSuggestions();
   syncSelectedClientFromName();
   go("edit");
@@ -1013,7 +1063,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.31 ----------
+// ---------- Conta e empresa v1.6.32 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{

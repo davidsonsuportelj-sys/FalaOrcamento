@@ -215,6 +215,85 @@ def _phone_last4(value):
     digits = re.sub(r"\D", "", str(value or ""))
     return digits[-4:] if len(digits) >= 4 else ""
 
+def _phone_match_key(value):
+    """Normaliza telefone para comparação sem guardar uma segunda cópia no banco."""
+    digits = re.sub(r"\D", "", str(value or ""))
+    # No Brasil, aceita tanto 11999999999 quanto 5511999999999 como o mesmo número.
+    if digits.startswith("55") and len(digits) in (12, 13):
+        digits = digits[2:]
+    return digits
+
+def _find_clients_by_phone(conn, account_id, phone):
+    key = _phone_match_key(phone)
+    if len(key) < 8:
+        return []
+    rows = conn.execute(
+        select(clients).where(clients.c.account_id == account_id).order_by(clients.c.id.asc())
+    ).mappings().all()
+    return [r for r in rows if _phone_match_key(r.get("phone")) == key]
+
+def _resolve_or_create_client_for_quote(conn, account_id, client_name, client_id=None, client_phone=""):
+    """Resolve por id/telefone/nome e cria cliente novo quando há nome + WhatsApp válido."""
+    name = str(client_name or "").strip()[:180]
+    phone = str(client_phone or "").strip()[:80]
+    phone_key = _phone_match_key(phone)
+
+    # Seleção explícita sempre tem prioridade e nunca atravessa account_id.
+    if client_id not in (None, ""):
+        try:
+            cid = int(client_id)
+        except (TypeError, ValueError):
+            cid = None
+        row = conn.execute(
+            select(clients).where((clients.c.id == cid) & (clients.c.account_id == account_id))
+        ).mappings().first() if cid is not None else None
+        if not row:
+            raise ValueError("Cliente selecionado não foi encontrado nesta empresa")
+
+        # Se o prestador corrigiu o WhatsApp do cliente selecionado, sincroniza o cadastro.
+        if len(phone_key) >= 8 and _phone_match_key(row.get("phone")) != phone_key:
+            conflicts = [r for r in _find_clients_by_phone(conn, account_id, phone) if r.get("id") != row.get("id")]
+            if conflicts:
+                raise ValueError("Este WhatsApp já pertence a outro cliente cadastrado")
+            conn.execute(
+                update(clients).where(
+                    (clients.c.id == row["id"]) & (clients.c.account_id == account_id)
+                ).values(phone=phone, updated_at=utcnow())
+            )
+            row = conn.execute(
+                select(clients).where((clients.c.id == row["id"]) & (clients.c.account_id == account_id))
+            ).mappings().first()
+        return row, False
+
+    # Sem id, o WhatsApp identifica o cadastro de forma mais segura que o nome.
+    if len(phone_key) >= 8:
+        matches = _find_clients_by_phone(conn, account_id, phone)
+        if len(matches) > 1:
+            raise ValueError("Há mais de um cliente com este WhatsApp. Selecione o cadastro correto na lista")
+        if len(matches) == 1:
+            return matches[0], False
+        if name and name.lower() != "cliente":
+            now = utcnow()
+            result = conn.execute(insert(clients).values(
+                account_id=account_id,
+                name=name,
+                phone=phone,
+                doc="",
+                email="",
+                notes="",
+                created_at=now,
+                updated_at=now
+            ))
+            cid = result.inserted_primary_key[0]
+            row = conn.execute(
+                select(clients).where((clients.c.id == cid) & (clients.c.account_id == account_id))
+            ).mappings().first()
+            return row, True
+
+    # Compatibilidade: sem telefone, ainda resolve nome somente quando ele é único.
+    row = _resolve_client_row(conn, account_id, name, None)
+    return row, False
+
 def _quote_response_hash(token, last4):
     payload = f"quote-response:{token}:{last4}".encode("utf-8")
     return hmac.new(str(SECRET_KEY).encode("utf-8"), payload, hashlib.sha256).hexdigest()
@@ -304,9 +383,9 @@ def init_db():
                     pass
 
 
-def quote_dict(row):
+def quote_dict(row, client_phone=None):
     r = dict(row)
-    return {
+    data = {
         "id": f"{r['id']:04d}",
         "token": r["public_token"],
         "client": r["client"],
@@ -322,6 +401,11 @@ def quote_dict(row):
         "verificationRequired": bool(r.get("response_verify_hash")),
         "publicUrl": f"{PUBLIC_APP_URL}/q/{r['public_token']}"
     }
+    # Telefone só é incluído nas respostas administrativas que o solicitarem.
+    # A página pública /q/<token> nunca recebe este dado.
+    if client_phone is not None:
+        data["clientPhone"] = str(client_phone or "")
+    return data
 
 
 def _send_reset_email(to_email, token):
@@ -452,7 +536,7 @@ def _start_session(user_row, remember=False):
 
 app = Flask(__name__, static_folder=None)
 
-# v1.6.31 security hardening: produção nunca deve iniciar com segredo padrão.
+# v1.6.32 security hardening: produção nunca deve iniciar com segredo padrão.
 if APP_ENV == "production" and SECRET_KEY in {"", "dev-only-change-me", "change-me", "secret"}:
     raise RuntimeError("SECRET_KEY insegura: configure uma chave longa e aleatória no ambiente de produção")
 if APP_ENV == "production" and BOOTSTRAP_ADMIN:
@@ -1317,7 +1401,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.31"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.32"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1329,7 +1413,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.31"
+        "version": "1.6.32"
     })
 
 
@@ -1341,7 +1425,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.31"
+        "version": "1.6.32"
     })
 
 
@@ -1601,7 +1685,7 @@ def password_reset():
     with engine.begin() as conn:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token_hash)).mappings().first()
-        # Compatibilidade temporária com links emitidos antes da v1.6.31.
+        # Compatibilidade temporária com links emitidos antes da v1.6.32.
         if not row:
             row = conn.execute(select(password_reset_tokens).where(password_reset_tokens.c.token==token)).mappings().first()
         if not row or row["used"] or _aware_utc(row["expires_at"]) < utcnow():
@@ -1637,7 +1721,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.31"
+        "version": "1.6.32"
     })
 
 
@@ -1693,7 +1777,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.31"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.32"})
 
 
 
@@ -1713,7 +1797,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.31"
+        "version":"1.6.32"
     })
 
 
@@ -1774,7 +1858,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.31"
+        "version": "1.6.32"
     })
 
 
@@ -2070,7 +2154,7 @@ def get_quote_by_token(token):
 
 @app.get("/api/quotes/<token>")
 def get_quote(token):
-    # v1.6.31: API administrativa é privada. O token público NÃO concede
+    # v1.6.32: API administrativa é privada. O token público NÃO concede
     # acesso à API interna; ele só é válido nas rotas /q/<token>.
     denied = require_admin()
     if denied:
@@ -2082,10 +2166,19 @@ def get_quote(token):
                 (quotes.c.account_id == current_account_id())
             )
         ).mappings().first()
-    if not row:
-        # 404 evita confirmar para outra conta que o token existe.
-        return jsonify({"error": "Orçamento não encontrado"}), 404
-    return jsonify(quote_dict(row))
+        if not row:
+            # 404 evita confirmar para outra conta que o token existe.
+            return jsonify({"error": "Orçamento não encontrado"}), 404
+        client_phone = ""
+        if row.get("client_id"):
+            crow = conn.execute(
+                select(clients).where(
+                    (clients.c.id == row["client_id"]) &
+                    (clients.c.account_id == current_account_id())
+                )
+            ).mappings().first()
+            client_phone = str((crow or {}).get("phone") or "")
+    return jsonify(quote_dict(row, client_phone=client_phone))
 
 @app.post("/api/quotes")
 def create_quote():
@@ -2096,6 +2189,7 @@ def create_quote():
     body = request.get_json(silent=True) or {}
     client = str(body.get("client") or "").strip()[:180]
     client_id = body.get("clientId")
+    client_phone = str(body.get("clientPhone") or "").strip()[:80]
     incoming_items = body.get("items") or []
     notes = str(body.get("notes") or "")[:4000]
 
@@ -2130,12 +2224,17 @@ def create_quote():
         if not pr:
             pr = {"name":"","phone":"","doc":""}
         token = uuid.uuid4().hex
-        client_row = _resolve_client_row(conn, current_account_id(), client, client_id)
+        try:
+            client_row, client_created = _resolve_or_create_client_for_quote(
+                conn, current_account_id(), client, client_id, client_phone
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
         resolved_client_id = client_row.get("id") if client_row else None
         if client_row:
             client = str(client_row.get("name") or client).strip()[:180]
-        client_phone = str((client_row or {}).get("phone") or "")
-        last4 = _phone_last4(client_phone)
+        resolved_phone = str((client_row or {}).get("phone") or client_phone or "")
+        last4 = _phone_last4(resolved_phone)
         response_verify_hash = _quote_response_hash(token, last4) if last4 else ""
         now = utcnow()
         result = conn.execute(insert(quotes).values(
@@ -2159,11 +2258,13 @@ def create_quote():
         qid = result.inserted_primary_key[0]
         row = conn.execute(select(quotes).where((quotes.c.id == qid) & (quotes.c.account_id==current_account_id()))).mappings().first()
 
-    return jsonify(quote_dict(row)), 201
+    payload = quote_dict(row, client_phone=resolved_phone)
+    payload["clientCreated"] = bool(client_created)
+    return jsonify(payload), 201
 
 @app.patch("/api/quotes/<token>")
 def update_quote(token):
-    # v1.6.31: toda mutação da API administrativa exige autenticação e tenant.
+    # v1.6.32: toda mutação da API administrativa exige autenticação e tenant.
     # Aceite/recusa do cliente continua exclusivamente em /q/<token>/respond.
     denied = require_admin()
     if denied:
@@ -2184,7 +2285,7 @@ def update_quote(token):
         values={"updated_at":utcnow()}
 
         # Cliente/itens/observações permanecem restritos à área administrativa.
-        editable_fields = any(k in body for k in ("client","clientId","items","notes"))
+        editable_fields = any(k in body for k in ("client","clientId","clientPhone","items","notes"))
         if editable_fields:
 
             client = str(body.get("client", row["client"]) or "Cliente").strip()[:180]
@@ -2212,20 +2313,31 @@ def update_quote(token):
                     total += item_total
 
             client_row = None
-            if "client" in body or "clientId" in body:
-                client_row = _resolve_client_row(conn, current_account_id(), client, body.get("clientId"))
+            client_created = False
+            client_binding_changed = any(k in body for k in ("client", "clientId", "clientPhone"))
+            if client_binding_changed:
+                try:
+                    client_row, client_created = _resolve_or_create_client_for_quote(
+                        conn,
+                        current_account_id(),
+                        client,
+                        body.get("clientId"),
+                        str(body.get("clientPhone") or "").strip()[:80]
+                    )
+                except ValueError as e:
+                    return jsonify({"error": str(e)}), 409
                 if client_row:
                     client = str(client_row.get("name") or client).strip()[:180]
 
             values.update({
                 "client":client,
-                "client_id": client_row.get("id") if client_row else (row.get("client_id") if not ("client" in body or "clientId" in body) else None),
+                "client_id": client_row.get("id") if client_row else (row.get("client_id") if not client_binding_changed else None),
                 "items_json":json.dumps(clean_items,ensure_ascii=False),
                 "notes":notes,
                 "total":round(total,2)
             })
-            if "client" in body or "clientId" in body:
-                phone = str((client_row or {}).get("phone") or "")
+            if client_binding_changed:
+                phone = str((client_row or {}).get("phone") or body.get("clientPhone") or "")
                 last4 = _phone_last4(phone)
                 values["response_verify_hash"] = _quote_response_hash(token, last4) if last4 else ""
                 values["verify_failures"] = 0
@@ -2261,8 +2373,20 @@ def update_quote(token):
                 (quotes.c.account_id == current_account_id())
             )
         ).mappings().first()
+        admin_phone = ""
+        if updated_row.get("client_id"):
+            crow = conn.execute(
+                select(clients).where(
+                    (clients.c.id == updated_row["client_id"]) &
+                    (clients.c.account_id == current_account_id())
+                )
+            ).mappings().first()
+            admin_phone = str((crow or {}).get("phone") or "")
 
-    return jsonify(quote_dict(updated_row))
+    payload = quote_dict(updated_row, client_phone=admin_phone)
+    if editable_fields:
+        payload["clientCreated"] = bool(locals().get("client_created", False))
+    return jsonify(payload)
 
 def _public_quote_html(row, verification_error=""):
 
@@ -2372,5 +2496,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.31 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.32 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)
