@@ -1,4 +1,4 @@
-"""Regressão v1.6.26: interpretação natural, associação descrição/quantidade/preço e cliente."""
+"""Regressão v1.6.27: interpretação natural, associação descrição/quantidade/preço e cliente."""
 import ast
 import re
 from pathlib import Path
@@ -38,7 +38,7 @@ CASES=[
     ("Ana","Orçamento para a Ana, vou assentar 25 metros de piso a 45 reais o metro, fazer o reboco de uma parede por 600 reais e trocar 5 telhas quebradas cobrando 35 reais cada.",
      [("Troca de telhas quebradas",25,45),("Serviço",1,600),("Serviço",5,35)],[("Assentamento de piso",25,45),("Reboco de parede",1,600),("Troca de telhas quebradas",5,35)]),
 
-    # Casos reais que motivaram a v1.6.26
+    # Casos reais que motivaram a v1.6.27
     ("Renato","Cliente Renato, vou trocar as pastilhas de freio dianteiras por 320 reais, fazer a troca de óleo e filtro por 180 e alinhar o carro por 90 reais.",
      [("Troca de s pastilhas de freio",1,320),("Troca de óleo e filtro por 18",1,180),("Serviço",1,90)],
      [("Troca de pastilhas de freio dianteiras",1,320),("Troca de óleo e filtro",1,180),("Alinhamento de carro",1,90)]),
@@ -63,7 +63,7 @@ for expected_client,text,raw,expected in CASES:
     exp=[(n,float(q),float(u)) for n,q,u in expected]
     assert got==exp,(expected_client,got,exp)
 
-# Autocorreção: a v1.6.26 não deve reintroduzir o item cancelado.
+# Autocorreção: a v1.6.27 não deve reintroduzir o item cancelado.
 text="Orçamento para Juliana, troca de 2 torneiras a 100 reais cada, não, corrigindo, são 3 torneiras a 100 reais cada, e instalação de chuveiro por 180 reais."
 client,items=run(text,[("Troca de torneiras",3,100),("Instalação de chuveiro",1,180)])
 assert client=="Juliana"

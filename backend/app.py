@@ -818,7 +818,45 @@ def system_health():
 
 @app.get("/api/ai-health")
 def ai_health():
-    """Verifica se o Ollama local está acessível e se o modelo está disponível."""
+    """Health check do provedor de IA configurado, sem gerar uma completion."""
+    if GROQ_API_KEY:
+        try:
+            import requests
+            resp = requests.get(
+                GROQ_BASE_URL + "/models",
+                headers={"Authorization": "Bearer " + GROQ_API_KEY},
+                timeout=5
+            )
+            if not resp.ok:
+                detail = (resp.text or "")[:800]
+                print(f"Groq health HTTP {resp.status_code}: {detail}")
+                return jsonify({
+                    "ok": False,
+                    "provider": "groq",
+                    "configured": True,
+                    "model": GROQ_MODEL,
+                    "modelAvailable": False
+                }), 503
+            payload = resp.json()
+            names = [str(m.get("id") or "") for m in payload.get("data", [])]
+            model_ok = GROQ_MODEL in names
+            return jsonify({
+                "ok": True,
+                "provider": "groq",
+                "configured": True,
+                "model": GROQ_MODEL,
+                "modelAvailable": model_ok
+            })
+        except Exception as e:
+            print("Groq health indisponível:", repr(e))
+            return jsonify({
+                "ok": False,
+                "provider": "groq",
+                "configured": True,
+                "model": GROQ_MODEL,
+                "modelAvailable": False
+            }), 503
+
     try:
         req = urllib.request.Request(
             OLLAMA_BASE_URL + "/api/tags",
@@ -827,22 +865,19 @@ def ai_health():
         with urllib.request.urlopen(req, timeout=3) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
         names = [m.get("name", "") for m in payload.get("models", [])]
-        model_ok = any(
-            n == OLLAMA_MODEL or n.startswith(OLLAMA_MODEL + ":")
-            for n in names
-        )
+        model_ok = any(n == OLLAMA_MODEL or n.startswith(OLLAMA_MODEL + ":") for n in names)
         return jsonify({
             "ok": True,
-            "ollama": "online",
+            "provider": "ollama",
             "model": OLLAMA_MODEL,
-            "modelAvailable": model_ok,
-            "models": names
+            "modelAvailable": model_ok
         })
     except Exception as e:
         return jsonify({
             "ok": False,
-            "ollama": "offline",
+            "provider": "ollama",
             "model": OLLAMA_MODEL,
+            "modelAvailable": False,
             "error": str(e)
         }), 503
 
@@ -953,13 +988,26 @@ Resultado: cliente Gabriel; "Troca de porta" qty 1 unit 100; "Troca de janela" q
                         {"role": "user", "content": text}
                     ],
                     "temperature": 0.1,
-                    "max_tokens": 1200,
-                    "response_format": {"type": "json_object"}
+                    "max_completion_tokens": 1200,
+                    "include_reasoning": False,
+                    "reasoning_effort": "low",
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "orcamento_interpretado",
+                            "strict": True,
+                            "schema": schema
+                        }
+                    }
                 },
                 timeout=20
             )
-            groq_response.raise_for_status()
-            content = groq_response.json()["choices"][0]["message"]["content"]
+            if not groq_response.ok:
+                detail = (groq_response.text or "")[:1500]
+                print(f"Erro Groq HTTP {groq_response.status_code}: {detail}")
+                groq_response.raise_for_status()
+            payload = groq_response.json()
+            content = payload["choices"][0]["message"]["content"]
             active_source = "groq"
             active_model = GROQ_MODEL
         else:
@@ -1187,7 +1235,7 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(select(provider.c.id).limit(1))
-        return jsonify({"ok": True, "database": "online", "version": "1.6.26"})
+        return jsonify({"ok": True, "database": "online", "version": "1.6.27"})
     except Exception as e:
         return jsonify({"ok": False, "database": "offline", "error": str(e)}), 503
 
@@ -1199,7 +1247,7 @@ def ai_status():
         "configured": bool(GROQ_API_KEY),
         "provider": "groq" if GROQ_API_KEY else "ollama",
         "model": GROQ_MODEL if GROQ_API_KEY else OLLAMA_MODEL,
-        "version": "1.6.26"
+        "version": "1.6.27"
     })
 
 
@@ -1211,7 +1259,7 @@ def auth_config():
         "demoEnabled": APP_ENV == "development",
         "mobileBearerAuth": True,
         "publicAppUrl": PUBLIC_APP_URL,
-        "version": "1.6.26"
+        "version": "1.6.27"
     })
 
 
@@ -1502,7 +1550,7 @@ def account_stats():
         "clients": int(client_count or 0),
         "quotes": int(quote_count or 0),
         "quotedTotal": float(quoted_total or 0),
-        "version": "1.6.26"
+        "version": "1.6.27"
     })
 
 
@@ -1558,7 +1606,7 @@ def production_readiness():
         "bootstrapAdminDisabled": not BOOTSTRAP_ADMIN,
         "secretKeyCustom": SECRET_KEY not in {"", "dev-only-change-me", "change-me", "secret"}
     }
-    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.26"})
+    return jsonify({"ready": all(checks.values()), "checks": checks, "version": "1.6.27"})
 
 
 
@@ -1578,7 +1626,7 @@ def account_profile():
         "user":{"id":user["id"],"name":user["name"],"email":user["email"],
                 "email_verified":bool(user["email_verified"]),
                 "auth_provider":user["auth_provider"]},
-        "version":"1.6.26"
+        "version":"1.6.27"
     })
 
 
@@ -1639,7 +1687,7 @@ def update_account_profile():
             "email_verified": bool(user["email_verified"]),
             "auth_provider": user["auth_provider"]
         },
-        "version": "1.6.26"
+        "version": "1.6.27"
     })
 
 
@@ -2145,5 +2193,5 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
-    print(f"FalaOrçamento v1.6.26 Inicialização Robusta: http://localhost:{port}")
+    print(f"FalaOrçamento v1.6.27 Inicialização Robusta: http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False)

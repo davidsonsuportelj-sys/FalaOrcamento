@@ -772,10 +772,10 @@ async function checkLocalAI(){
     const j=await r.json();
     if(j.ok && j.modelAvailable){
       document.body.dataset.ai="online";
-      console.log("IA local online:",j.model);
+      console.log("IA online:",j.provider||"configurada",j.model);
     }else{
       document.body.dataset.ai="offline";
-      console.warn("Ollama/modelo indisponível:",j);
+      console.warn("IA/modelo indisponível:",j);
     }
   }catch(e){
     document.body.dataset.ai="offline";
@@ -783,7 +783,6 @@ async function checkLocalAI(){
 }
 if(!publicMode()){
   setTimeout(checkLocalAI,1000);
-  setInterval(checkLocalAI,15000);
 }
 
 
@@ -984,7 +983,7 @@ $("#exportAccountBtn")?.addEventListener("click",async()=>{
 });
 
 
-// ---------- Conta e empresa v1.6.26 ----------
+// ---------- Conta e empresa v1.6.27 ----------
 async function loadAccountProfile(){
   if(!backendOnline || !adminAuthenticated) return;
   try{
